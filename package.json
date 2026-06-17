@@ -1,0 +1,38 @@
+{
+  "name": "agent-office",
+  "version": "2.0.0",
+  "description": "Live terminal monitor for local AI coding agents: animated office, metrics dashboard, session history, and headless event stream.",
+  "main": "src/index.js",
+  "bin": {
+    "agent-office": "bin/agent-office.js"
+  },
+  "scripts": {
+    "start": "node bin/agent-office.js",
+    "demo": "node bin/agent-office.js --demo",
+    "dashboard": "node bin/agent-office.js --dashboard",
+    "watch": "node bin/agent-office.js --watch",
+    "history": "node bin/agent-office.js --history",
+    "test": "node --test",
+    "check": "node --check bin/agent-office.js && find src test -name '*.js' -print0 | xargs -0 -n1 node --check"
+  },
+  "keywords": [
+    "terminal",
+    "tui",
+    "ai-agent",
+    "process-monitor",
+    "dashboard",
+    "observability",
+    "claude",
+    "codex",
+    "cursor"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "blessed": "^0.1.81"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
+

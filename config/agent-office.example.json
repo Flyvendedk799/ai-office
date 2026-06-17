@@ -1,0 +1,48 @@
+{
+  "scanIntervalMs": 2000,
+  "stoppedGraceMs": 10000,
+  "enableWindowTitleScan": true,
+  "enableAppWindowTitleScan": false,
+  "enableSessionMetadataScan": true,
+  "enableHistory": true,
+  "historyPath": "~/.agent-office/history.jsonl",
+  "bellOnFinish": true,
+  "idleAlertMs": 0,
+  "defaultView": "office",
+  "sessionFolderPaths": [],
+  "excludePatterns": [
+    "agent-office"
+  ],
+  "terminalAgentKeywords": [
+    "aider",
+    "amp",
+    "claude",
+    "claude-code",
+    "codex",
+    "continue",
+    "cursor-agent",
+    "gemini",
+    "goose",
+    "opencode",
+    "openhands",
+    "qwen",
+    "sweep"
+  ],
+  "customTools": [
+    {
+      "key": "my-agent",
+      "name": "My Agent",
+      "icon": "M",
+      "color": "magenta",
+      "processNames": [
+        "my-agent"
+      ],
+      "commandPatterns": [
+        "my-agent",
+        "regex:\\bmy-ai-tool\\b"
+      ],
+      "windowTitlePatterns": [],
+      "sessionFolderPaths": []
+    }
+  ]
+}
