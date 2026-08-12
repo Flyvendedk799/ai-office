@@ -15,7 +15,7 @@ function classifyGeneric(proc, context) {
     toolKey: 'unknown-agent',
     toolName: 'Unknown AI Agent',
     icon: '?',
-    color: 'magenta',
+    color: 'white',
     confidence: 0.45,
     source: 'generic-detector',
     fallbackPrefix: 'agent',

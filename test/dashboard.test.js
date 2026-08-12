@@ -39,7 +39,7 @@ test('renders a table with headers, metrics and summary', () => {
     sortKey: 'cpu',
   }));
 
-  assert.match(out, /AGENT OFFICE/);
+  assert.match(out, /ai-office/);
   assert.match(out, /dashboard/);
   assert.match(out, /STATUS/);
   assert.match(out, /CPU/);

@@ -15,7 +15,7 @@ function classifyCursor(proc, context) {
     toolKey: 'cursor',
     toolName: 'Cursor',
     icon: 'X',
-    color: 'green',
+    color: 'magenta',
     confidence: 0.85,
     source: 'cursor-detector',
     surface: 'desktop',

@@ -155,8 +155,9 @@ function computeTotals(agents) {
 
 function drawTitle(grid, width, totals, cpuHistory, paused) {
   fillRow(grid, 0, ' ', 'gray');
-  drawText(grid, 0, 0, 'AGENT OFFICE', 'cyan');
-  drawText(grid, 13, 0, '· dashboard', 'gray');
+  drawText(grid, 0, 0, '▍', 'cyan');
+  drawText(grid, 1, 0, 'ai-office', 'white');
+  drawText(grid, 11, 0, '· dashboard', 'gray');
   const spark = sparkline(cpuHistory, { width: 16 });
   const summary = [
     `${totals.agents} agents`,
@@ -267,11 +268,11 @@ function cellFor(key, agent, now) {
 }
 
 function statusWord(agent) {
-  if (agent.status === 'stopped') return 'stopped';
+  if (agent.status === 'stopped') return 'done';
   if (agent.status === 'starting') return 'start';
   if (agent.status === 'idle') return 'idle';
-  if (agent.status === 'unknown') return 'unknown';
-  return 'working';
+  if (agent.status === 'unknown') return '?';
+  return 'work';
 }
 
 function cpuColor(cpu) {
@@ -303,7 +304,7 @@ function sessionName(agent) {
 // distinct from the live task shown in the TASK column.
 function identityName(agent) {
   const project = agent.projectLabel || agent.projectPath;
-  const base = project ? String(project).split('/').filter(Boolean).pop() : '';
+  const base = project ? String(project).split(/[\\/]/).filter(Boolean).pop() : '';
   return String(agent.terminalTitle || base || agent.sessionName || agent.toolName || 'session');
 }
 

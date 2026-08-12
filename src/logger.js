@@ -4,7 +4,7 @@ const path = require('path');
 
 function createLogger({ debug = false, logPath } = {}) {
   const lines = [];
-  const resolvedLogPath = logPath || path.join(os.homedir(), '.agent-office', 'agent-office.log');
+  const resolvedLogPath = logPath || path.join(os.homedir(), '.ai-office', 'ai-office.log');
 
   function append(level, message, data) {
     const line = `${new Date().toISOString()} ${level.toUpperCase()} ${message}${data === undefined ? '' : ` ${safeJson(data)}`}`;

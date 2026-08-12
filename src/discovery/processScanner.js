@@ -3,10 +3,18 @@ const { promisify } = require('util');
 const { basenameFromCommand } = require('../util/text');
 const { parseEtime } = require('../util/time');
 const { collectProcessCwds } = require('./processCwd');
+const { scanProcessesWindows } = require('./windowsProcessScanner');
 
 const execFileAsync = promisify(execFile);
 
-async function scanProcesses({ logger } = {}) {
+async function scanProcesses({ logger, platform = process.platform } = {}) {
+  if (platform === 'win32') {
+    return scanProcessesWindows({ logger });
+  }
+  return scanProcessesPosix({ logger });
+}
+
+async function scanProcessesPosix({ logger } = {}) {
   const started = Date.now();
   try {
     const { stdout } = await execFileAsync('ps', ['-ww', '-axo', 'pid=,ppid=,stat=,etime=,%cpu=,%mem=,rss=,tt=,command='], {

@@ -37,18 +37,13 @@ function buildProcessContext(processes) {
   }
 
   function hasTerminalAncestor(proc) {
-    return parentChain(proc, 12).some((parent) => {
-      const name = parent.lowerName || '';
-      const command = parent.lowerCommand || '';
-      return ['zsh', 'bash', 'fish', 'sh', 'tmux', 'screen', 'terminal', 'iterm2', 'warp'].some((needle) => (
-        name.includes(needle) || command.includes(needle)
-      ));
-    });
+    return parentChain(proc, 12).some(isTerminalHost);
   }
 
   return {
     byPid,
     childrenByPpid,
+    isTerminalHost,
     childrenOf,
     findAncestor,
     hasTerminalAncestor,
@@ -58,7 +53,31 @@ function buildProcessContext(processes) {
   };
 }
 
+// Shells and terminal emulators across macOS, Linux, and Windows. An agent with
+// one of these in its parent chain was launched from a terminal.
+const TERMINAL_HOSTS = [
+  'zsh', 'bash', 'fish', 'sh', 'nu', 'xonsh',
+  'tmux', 'screen', 'zellij',
+  'terminal', 'iterm2', 'warp', 'alacritty', 'kitty', 'wezterm', 'ghostty',
+  'gnome-terminal', 'konsole', 'xterm', 'foot', 'rio', 'tilix',
+  'powershell', 'pwsh', 'cmd', 'conhost', 'windowsterminal', 'wt', 'mintty', 'openconsole',
+];
+
+function isTerminalHost(proc) {
+  // Login shells report as "-zsh" / "-bash".
+  const name = (proc.lowerName || '').replace(/^-/, '');
+  const command = proc.lowerCommand || '';
+  return TERMINAL_HOSTS.some((needle) => (
+    // Short names ("sh", "wt", "cmd") match exactly so "ssh-agent" or
+    // "cmdlet-host" never count as terminals; longer names match loosely.
+    needle.length <= 4
+      ? name === needle || name === `${needle}.exe` || command === needle || command === `-${needle}`
+      : name.includes(needle) || command.includes(needle)
+  ));
+}
+
 module.exports = {
   buildProcessContext,
+  isTerminalHost,
 };
 

@@ -20,6 +20,11 @@ const CWD_KEYWORDS = [
 ];
 
 async function collectProcessCwds(processes, logger) {
+  // lsof is a POSIX tool; on Windows the project path comes from command-line
+  // arguments and session metadata instead.
+  if (process.platform === 'win32') {
+    return new Map();
+  }
   const pids = processes
     .filter(shouldCollectCwd)
     .map((proc) => proc.pid)

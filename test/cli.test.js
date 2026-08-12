@@ -7,7 +7,7 @@ const os = require('os');
 const path = require('path');
 
 const execFileAsync = promisify(execFile);
-const CLI = path.join(__dirname, '..', 'bin', 'agent-office.js');
+const CLI = path.join(__dirname, '..', 'bin', 'ai-office.js');
 
 test('CLI help documents v2 run modes and controls', async () => {
   const { stdout } = await execFileAsync(process.execPath, [CLI, '--help']);

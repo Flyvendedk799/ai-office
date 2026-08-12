@@ -16,10 +16,11 @@ const { formatMemoryKb, formatPercent } = require('../src/util/format');
 const { startTui } = require('../src/tui/app');
 
 function printHelp() {
-  console.log(`agent-office — live overview and monitor for local AI coding agents.
+  console.log(`ai-office — your local AI coding agents, visible: a tiny animated
+ASCII office plus a live metrics dashboard.
 
 Usage:
-  agent-office [options]
+  ai-office [options]
 
 Run modes:
   (default)               Animated office TUI.
@@ -32,7 +33,7 @@ Options:
   --demo, -d              Run with fake animated agents.
   --json                  Machine-readable JSON (for --once / --history).
   --filter <text>         Start the TUI with a session filter applied.
-  --debug                 Write debug logs to ~/.agent-office/agent-office.log.
+  --debug                 Write debug logs to ~/.ai-office/ai-office.log.
   --no-history            Do not record completed sessions to disk.
   --config <path>         Load a JSON config file.
   --scan-interval <ms>    Override process scan interval.
@@ -131,7 +132,7 @@ async function main() {
   }
   if (options.unknown) {
     console.error(`Unknown option: ${options.unknown}`);
-    console.error('Run agent-office --help for usage.');
+    console.error('Run ai-office --help for usage.');
     process.exitCode = 2;
     return;
   }

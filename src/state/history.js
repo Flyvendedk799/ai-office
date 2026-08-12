@@ -4,9 +4,9 @@ const path = require('path');
 
 function defaultHistoryPath() {
   if (process.env.XDG_STATE_HOME) {
-    return path.join(process.env.XDG_STATE_HOME, 'agent-office', 'history.jsonl');
+    return path.join(process.env.XDG_STATE_HOME, 'ai-office', 'history.jsonl');
   }
-  return path.join(os.homedir(), '.agent-office', 'history.jsonl');
+  return path.join(os.homedir(), '.ai-office', 'history.jsonl');
 }
 
 // Records one JSONL line per completed agent session so users can review what

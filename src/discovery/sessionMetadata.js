@@ -41,19 +41,51 @@ function enrichAgentsWithSessionMetadata(agents, metadata = {}, now = Date.now()
   const sessions = metadata.sessions || [];
   const used = new Set();
   const context = buildMatchContext(agents, sessions);
+  const matches = new Map();
+
+  for (const agent of agents) {
+    const match = bestSessionForAgent(agent, sessions, used, context);
+    if (match) {
+      matches.set(agent, match);
+      used.add(sessionKey(match.session));
+    }
+  }
+
+  // Second pass: a running agent keeps its session file hot. If exactly one
+  // fresh session of the same vendor+surface is left unclaimed, it belongs to
+  // the one agent that matched nothing — common for resumed sessions, whose
+  // file creation time predates the process.
+  for (const agent of agents) {
+    if (matches.has(agent)) {
+      continue;
+    }
+    const vendor = vendorOf(agent);
+    const surface = agent.surface || 'terminal';
+    const fresh = sessions.filter((session) => !used.has(sessionKey(session))
+      && session.vendor === vendor
+      && (session.surface || 'terminal') === surface
+      && now - (session.updatedAt || 0) < IDLE_AFTER_MS);
+    if (fresh.length === 1) {
+      matches.set(agent, { session: fresh[0], confidence: 0.5, reasons: ['live-leftover'] });
+      used.add(sessionKey(fresh[0]));
+    }
+  }
 
   return agents.map((agent) => {
-    const match = bestSessionForAgent(agent, sessions, used, context);
+    const match = matches.get(agent);
     if (!match) {
       return agent;
     }
     const session = match.session;
-    used.add(session.key || session.sourcePath || `${session.vendor}:${session.updatedAt}`);
 
     const projectPath = preferProjectPath(agent.projectPath, session.projectPath);
     const title = session.title || agent.title;
     const currentTask = session.currentTask || agent.currentTask || title;
-    const sessionName = betterSessionName(agent.sessionName, title || session.sessionName, agent);
+    const sessionName = betterSessionName(
+      agent.sessionName,
+      title || session.sessionName || (projectPath ? path.basename(projectPath) : ''),
+      agent,
+    );
     const lastActivityAt = session.updatedAt || agent.lastActivityAt;
     // Only known-stale sessions are downgraded to idle; everything else stays at
     // its desk. We never upgrade to active here (the process is already active).
@@ -88,7 +120,7 @@ function bestSessionForAgent(agent, sessions, used = new Set(), context = buildM
   let best;
 
   for (const session of sessions) {
-    if (used.has(session.key || session.sourcePath || `${session.vendor}:${session.updatedAt}`)) {
+    if (used.has(sessionKey(session))) {
       continue;
     }
     const match = sessionMatch(agent, session, vendor, surface, context);
@@ -138,6 +170,19 @@ function sessionMatch(agent, session, vendor, surface, context) {
     score += 30;
     reasons.push('project-name');
   }
+  // A session file created within moments of the process starting almost
+  // certainly belongs to that process. This is the main disambiguator on
+  // Windows, where there is no lsof to read an agent's cwd.
+  if (Number.isFinite(agent.startedAt) && Number.isFinite(session.createdAt) && session.createdAt > 0) {
+    const driftMs = Math.abs(agent.startedAt - session.createdAt);
+    if (driftMs < 90 * 1000) {
+      // Closer starts score higher, so overlapping windows resolve to the
+      // nearest session deterministically.
+      score += 88 - Math.min(20, Math.floor(driftMs / 5000));
+      reasons.push('started-together');
+    }
+  }
+
   if (session.updatedAt) {
     const ageMs = Math.max(0, Date.now() - session.updatedAt);
     const recency = Math.max(0, 22 - Math.floor(ageMs / (60 * 60 * 1000)));
@@ -145,7 +190,7 @@ function sessionMatch(agent, session, vendor, surface, context) {
     if (recency > 0) reasons.push('recent');
   }
 
-  const strong = reasons.some((reason) => ['project', 'cwd', 'session-id', 'title', 'project-name'].includes(reason));
+  const strong = reasons.some((reason) => ['project', 'cwd', 'session-id', 'title', 'project-name', 'started-together'].includes(reason));
   const groupKey = `${vendor}:${surface}`;
   const uniqueWeakMatch = !strong
     && session.vendor === vendor
@@ -168,6 +213,10 @@ function sessionMatch(agent, session, vendor, surface, context) {
     reasons,
     confidence: Math.min(0.99, Math.max(0.35, score / 140)),
   };
+}
+
+function sessionKey(session) {
+  return session.key || session.sourcePath || `${session.vendor}:${session.updatedAt}`;
 }
 
 function buildMatchContext(agents, sessions) {
@@ -212,6 +261,7 @@ async function collectCodexSessions(logger) {
         ...parsed,
         title: title || parsed.title || titleFromText(prompt || parsed.currentTask),
         currentTask: parsed.currentTask || prompt,
+        createdAt: file.birthtimeMs,
         updatedAt: Math.max(parsed.updatedAt || 0, file.mtimeMs || 0, indexTitles.get(parsed.sessionId)?.updatedAt || 0, historyPrompts.get(parsed.sessionId)?.updatedAt || 0),
       });
     } catch (error) {
@@ -322,24 +372,65 @@ function parseCodexJsonl(lines, sourcePath = '') {
   return session;
 }
 
+// Where each vendor keeps local app data, per platform. Every candidate root is
+// probed; missing directories are skipped silently.
+function claudeDesktopRoots() {
+  const home = os.homedir();
+  const roots = [
+    path.join(home, 'Library', 'Application Support', 'Claude'),
+    path.join(process.env.APPDATA || path.join(home, 'AppData', 'Roaming'), 'Claude'),
+    path.join(process.env.XDG_CONFIG_HOME || path.join(home, '.config'), 'Claude'),
+  ];
+  // The Microsoft Store build keeps its Roaming data inside the MSIX package.
+  try {
+    const packagesDir = path.join(home, 'AppData', 'Local', 'Packages');
+    for (const entry of require('fs').readdirSync(packagesDir)) {
+      if (entry.startsWith('Claude_')) {
+        roots.push(path.join(packagesDir, entry, 'LocalCache', 'Roaming', 'Claude'));
+      }
+    }
+  } catch {
+    // Not Windows, or no Packages directory.
+  }
+  return roots;
+}
+
+function cursorWorkspaceRoots() {
+  const home = os.homedir();
+  return [
+    path.join(home, 'Library', 'Application Support', 'Cursor', 'User', 'workspaceStorage'),
+    path.join(process.env.APPDATA || path.join(home, 'AppData', 'Roaming'), 'Cursor', 'User', 'workspaceStorage'),
+    path.join(process.env.XDG_CONFIG_HOME || path.join(home, '.config'), 'Cursor', 'User', 'workspaceStorage'),
+  ];
+}
+
 async function collectClaudeSessions(logger) {
   const home = os.homedir();
   const cliFiles = await recentFiles([path.join(home, '.claude', 'projects')], (file) => file.endsWith('.jsonl'), {
     maxDepth: 5,
     maxFiles: MAX_RECENT_FILES,
   });
-  const desktopFiles = await recentFiles([
-    path.join(home, 'Library', 'Application Support', 'Claude', 'local-agent-mode-sessions'),
-    path.join(home, 'Library', 'Application Support', 'Claude', 'claude-code-sessions'),
-  ], (file) => path.basename(file).startsWith('local_') && file.endsWith('.json'), {
-    maxDepth: 8,
-    maxFiles: MAX_RECENT_FILES,
-  });
+  const desktopFiles = await recentFiles(
+    claudeDesktopRoots().flatMap((root) => [
+      path.join(root, 'local-agent-mode-sessions'),
+      path.join(root, 'claude-code-sessions'),
+    ]),
+    (file) => path.basename(file).startsWith('local_') && file.endsWith('.json'),
+    {
+      maxDepth: 8,
+      maxFiles: MAX_RECENT_FILES,
+    },
+  );
 
   const sessions = [];
   for (const file of cliFiles) {
     try {
-      sessions.push(parseClaudeJsonl(await readJsonlTail(file.path), file.path, file.mtimeMs));
+      // Head + tail: the head holds the opening prompt and cwd, the tail holds
+      // the live title/task records. The middle of a long session matters less.
+      sessions.push({
+        ...parseClaudeJsonl(await readJsonlHeadTail(file.path), file.path, file.mtimeMs),
+        createdAt: file.birthtimeMs,
+      });
     } catch (error) {
       logger?.debug('claude jsonl parse failed', { file: file.path, error: error.message });
     }
@@ -374,6 +465,16 @@ function parseClaudeJsonl(lines, sourcePath = '', fallbackUpdatedAt = 0) {
     if (item.cwd) session.projectPath = item.cwd;
     if (item.slug) session.title = cleanTitle(item.slug);
 
+    // Claude Code ≥2.x writes dedicated identity records. The custom title (the
+    // user's own tab name) outranks the generated ai-title.
+    if (item.type === 'custom-title' && item.customTitle) session.customTitle = cleanTitle(item.customTitle);
+    if (item.type === 'agent-name' && item.agentName) session.agentName = cleanTitle(item.agentName);
+    if (item.type === 'ai-title' && item.aiTitle) session.aiTitle = cleanTitle(item.aiTitle);
+    if (item.type === 'last-prompt' && item.lastPrompt) {
+      session.currentTask = cleanTask(item.lastPrompt);
+      session.activity = session.activity || 'reading prompt';
+    }
+
     if (item.type === 'user' && item.message) {
       const text = messageText(item.message);
       if (isRealUserPrompt(text, item)) {
@@ -399,7 +500,13 @@ function parseClaudeJsonl(lines, sourcePath = '', fallbackUpdatedAt = 0) {
     }
   }
 
-  session.title = cleanTitle(session.title || titleFromText(session.currentTask));
+  session.title = cleanTitle(
+    session.customTitle
+    || session.agentName
+    || session.aiTitle
+    || session.title
+    || titleFromText(session.currentTask),
+  );
   return session;
 }
 
@@ -427,8 +534,7 @@ function parseClaudeDesktopJson(item, sourcePath = '', fallbackUpdatedAt = 0) {
 }
 
 async function collectCursorSessions(logger) {
-  const base = path.join(os.homedir(), 'Library', 'Application Support', 'Cursor', 'User', 'workspaceStorage');
-  const files = await recentFiles([base], (file) => path.basename(file) === 'workspace.json', {
+  const files = await recentFiles(cursorWorkspaceRoots(), (file) => path.basename(file) === 'workspace.json', {
     maxDepth: 2,
     maxFiles: 40,
   });
@@ -479,7 +585,7 @@ async function recentFiles(roots, predicate, { maxDepth = 4, maxFiles = 40 } = {
       } else if (predicate(fullPath)) {
         try {
           const stat = await fs.stat(fullPath);
-          files.push({ path: fullPath, mtimeMs: stat.mtimeMs, size: stat.size });
+          files.push({ path: fullPath, mtimeMs: stat.mtimeMs, birthtimeMs: stat.birthtimeMs, size: stat.size });
         } catch {
           // Ignore disappearing session files.
         }
@@ -645,7 +751,9 @@ function samePath(left, right) {
 }
 
 function normalizePath(value) {
-  return String(value || '').replace(/\/$/, '');
+  const text = String(value || '').replace(/\\/g, '/').replace(/\/+$/, '');
+  // Drive-letter paths are case-insensitive.
+  return /^[a-z]:(\/|$)/i.test(text) ? text.toLowerCase() : text;
 }
 
 function normalizeText(value) {
@@ -665,7 +773,9 @@ function firstUsefulProjectPath(values) {
 function isUsefulProjectPath(value) {
   const text = String(value || '');
   if (!text || text === os.homedir()) return false;
-  return !/(\/Library\/Application Support\/Claude\/|\/\.codex\/computer-use\/|\/Applications\/|\/System\/|\/usr\/|\/bin\/)/.test(text);
+  return !/(\/Library\/Application Support\/Claude\/|\/\.codex\/computer-use\/|\/Applications\/|\/System\/|\/usr\/|\/bin\/)/.test(text)
+    && !/[\\/](?:Windows|Program Files(?: \(x86\))?)[\\/]/i.test(text)
+    && !/AppData[\\/]Local[\\/]Packages/i.test(text);
 }
 
 function betterSessionName(existing, candidate, agent) {
@@ -681,9 +791,11 @@ function fileUriToPath(value) {
   if (!value) return '';
   const text = String(value);
   if (text.startsWith('file://')) {
-    return decodeURIComponent(text.slice('file://'.length));
+    const decoded = decodeURIComponent(text.slice('file://'.length));
+    // file:///C:/dev/app decodes to /C:/dev/app — drop the leading slash.
+    return /^\/[a-z]:\//i.test(decoded) ? decoded.slice(1) : decoded;
   }
-  return text.startsWith('/') ? text : '';
+  return text.startsWith('/') || /^[a-z]:[\\/]/i.test(text) ? text : '';
 }
 
 module.exports = {

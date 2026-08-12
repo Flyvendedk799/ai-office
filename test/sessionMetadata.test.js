@@ -164,6 +164,82 @@ test('allows a unique weak app-session match when it is the only candidate', () 
   assert.match(enriched[0].metadataReason, /vendor/);
 });
 
+test('reads Claude Code identity records (custom-title, ai-title, last-prompt)', () => {
+  const lines = [
+    JSON.stringify({ type: 'user', timestamp: '2026-08-01T10:00:00Z', cwd: 'C:\\Users\\me\\shop', message: { role: 'user', content: 'Fix the checkout bug.' } }),
+    JSON.stringify({ type: 'ai-title', aiTitle: 'Fix checkout bug in shop' }),
+    JSON.stringify({ type: 'last-prompt', lastPrompt: 'Now also add a test.' }),
+    JSON.stringify({ type: 'custom-title', customTitle: 'Shop checkout' }),
+  ];
+
+  const parsed = parseClaudeJsonl(lines, 'C:\\tmp\\claude.jsonl');
+
+  // The user's own tab name outranks the generated ai-title.
+  assert.equal(parsed.title, 'Shop checkout');
+  assert.equal(parsed.currentTask, 'Now also add a test.');
+  assert.equal(parsed.projectPath, 'C:\\Users\\me\\shop');
+});
+
+test('matches sessions created moments after each process started', () => {
+  const now = Date.now();
+  const enriched = enrichAgentsWithSessionMetadata([
+    { id: 'claude-code:1', toolKey: 'claude-code', surface: 'terminal', sessionName: 'claude-1', startedAt: now - 60_000 },
+    { id: 'claude-code:2', toolKey: 'claude-code', surface: 'terminal', sessionName: 'claude-2', startedAt: now - 600_000 },
+  ], {
+    sessions: [
+      { key: 'a', vendor: 'claude', surface: 'terminal', title: 'Fresh work', createdAt: now - 58_000, updatedAt: now },
+      { key: 'b', vendor: 'claude', surface: 'terminal', title: 'Older work', createdAt: now - 601_000, updatedAt: now - 1000 },
+    ],
+  }, now);
+
+  assert.equal(enriched[0].title, 'Fresh work');
+  assert.equal(enriched[1].title, 'Older work');
+  assert.match(enriched[0].metadataReason, /started-together/);
+});
+
+test('gives the last unmatched agent the only remaining live session', () => {
+  const now = Date.now();
+  const enriched = enrichAgentsWithSessionMetadata([
+    { id: 'claude-code:1', toolKey: 'claude-code', surface: 'terminal', sessionName: 'claude-1', startedAt: now - 30_000 },
+    // Resumed session: the process is young but its file is a day old, so no
+    // started-together signal exists for it.
+    { id: 'claude-code:2', toolKey: 'claude-code', surface: 'terminal', sessionName: 'claude-2', startedAt: now - 3_600_000 },
+  ], {
+    sessions: [
+      { key: 'fresh', vendor: 'claude', surface: 'terminal', title: 'New session', createdAt: now - 29_000, updatedAt: now },
+      { key: 'resumed', vendor: 'claude', surface: 'terminal', title: 'Resumed session', createdAt: now - 86_400_000, updatedAt: now - 5_000 },
+    ],
+  }, now);
+
+  assert.equal(enriched[0].title, 'New session');
+  assert.equal(enriched[1].title, 'Resumed session');
+  assert.match(enriched[1].metadataReason, /live-leftover/);
+});
+
+test('normalizes Windows paths when matching agent and session projects', () => {
+  const enriched = enrichAgentsWithSessionMetadata([
+    {
+      id: 'claude-code:9',
+      toolKey: 'claude-code',
+      surface: 'terminal',
+      sessionName: 'claude-9',
+      projectPath: 'C:\\Users\\Me\\Shop',
+    },
+  ], {
+    sessions: [{
+      key: 'win',
+      vendor: 'claude',
+      surface: 'terminal',
+      title: 'Windows path match',
+      projectPath: 'c:/users/me/shop',
+      updatedAt: Date.now(),
+    }],
+  });
+
+  assert.equal(enriched[0].title, 'Windows path match');
+  assert.match(enriched[0].metadataReason, /project/);
+});
+
 test('allows a single desktop app to use the freshest matching desktop session', () => {
   const enriched = enrichAgentsWithSessionMetadata([
     {

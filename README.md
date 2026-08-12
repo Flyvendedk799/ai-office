@@ -1,196 +1,122 @@
-# Agent Office
+# ai-office
 
-`agent-office` is a local terminal tool that discovers the AI coding agents running on your machine and shows them two ways:
+**Your AI coding agents, at their desks.** `ai-office` discovers every AI agent running on your machine — Claude Code, Codex, Cursor, Aider, and friends — and renders them as tiny workers in an animated ASCII office. When an agent is busy, it types. When it goes quiet, it wanders to the break room for a coffee. When it exits, it walks out the door.
 
-- an **animated office** where each agent is a little ASCII worker at a desk, and
-- a **metrics dashboard** — a dense, sortable table with live CPU, memory, runtime, status, and current task per agent.
+<img src="https://raw.githubusercontent.com/Flyvendedk799/ai-office/main/assets/demo.svg" alt="ai-office animated demo: agents working at desks, taking coffee breaks, with a live session list" width="100%">
 
-It also records a **session history** so you can see what ran while you were away, and a **headless watch mode** that streams agent lifecycle events as NDJSON for scripting and logging.
+There's a sun that crosses the office windows over the day (the moon takes the night shift), a wall clock that keeps real time, and a roomba that never stops patrolling. It is a process monitor. It is also an ant farm for your agents.
 
-It scans local process metadata, classifies likely agents (Codex, Claude Code/Desktop, Cursor, Aider, Gemini, Goose, OpenCode, and custom tools), groups their helper processes, enriches them with local session metadata, and updates in real time.
+For when you want numbers instead of ambience, press `d`:
 
-## Session identity (how agents are named)
+<img src="https://raw.githubusercontent.com/Flyvendedk799/ai-office/main/assets/dashboard.svg" alt="ai-office dashboard: sortable table with live CPU, memory, runtime, and current task per agent" width="100%">
 
-The two surfaces keep their "session" in different places, and v2 reads both:
-
-- **Terminal agents** (Codex CLI, Claude Code) — the session is the **terminal tab**. agent-office reads each tab's title via AppleScript, keyed by tty, so an agent shows up as e.g. `Gamehub` or `ai-office` (the title Claude Code/Codex set), not `claude-12345`. On by default (`enableWindowTitleScan`); macOS only; uses Automation permission.
-- **Desktop agents** (Claude/Codex/Cursor apps) — the session lives inside the app. agent-office reads the app's local session files, and optionally the **frontmost window title** (`enableAppWindowTitleScan`, off by default) for the open project/conversation. Window-title reading needs **Accessibility** permission for the terminal app that launches agent-office (System Settings → Privacy & Security → Accessibility), which takes effect after that app is fully relaunched.
-
-If a title can't be read, agents fall back to project name, then tty (`claude@s000`), then pid.
-
-## What's new in v2
-
-- **Dashboard view** (`d` / `o` to toggle, or `--dashboard`) with sortable columns and a per-agent detail pane.
-- **Live resource metrics**: per-agent CPU%, memory (RSS), and runtime, aggregated across an agent's grouped processes (e.g. a desktop app's helpers). A CPU sparkline tracks recent load.
-- **Session history**: completed sessions are appended to `~/.agent-office/history.jsonl`; review them with `agent-office --history`.
-- **Alerts**: a terminal bell + on-screen toast when an agent finishes.
-- **Filter** (`/`) and **sort** (`s`) in the dashboard.
-- **Agent actions**: signal the selected agent (`k` → SIGTERM/SIGINT/SIGKILL) or show a `cd <project>` hint (`c`).
-- **Headless `--watch`** mode streaming NDJSON lifecycle events.
-
-## Install And Run
+## Quick start
 
 ```bash
-npm install
-npm run demo            # fake agents, great for a first look
+npx ai-office --demo     # fake agents, zero setup — see it move
+npx ai-office            # your real agents
 ```
 
-Run against your real local agents:
+Or keep it around:
 
 ```bash
-npm start               # animated office
-npm run dashboard       # start directly in the table dashboard
+npm install -g ai-office
+ai-office
 ```
 
-Inspect without the TUI:
+Works on **macOS, Linux, and Windows**. Node 18+.
+
+## Why
+
+You start a Claude Code session. Then another one in a second terminal. Then Codex in a third, and at some point there are five agents burning tokens across four projects and you honestly could not say which of them is doing what. `ai-office` gives them one room: who's working, who's been idle for twenty minutes, what each one was asked to do, and how much CPU and memory the whole workforce is using.
+
+Each agent is labeled with its **real session identity** — the tab title you gave it, its generated session title, or its project — and its **live task**: the last prompt you sent it, or the tool call it's running right now.
+
+## The two views
+
+**Office** (default) — the animated floor. Agents arrive through the door, sit at desks, and type. Selected agents explain themselves in a speech bubble. Idle agents get coffee, sip it, and nap on the couch until work resumes. A compact session list with live CPU sits under the floor.
+
+**Dashboard** (`d`) — one row per agent: status, tool, session, CPU%, memory, runtime, PID, project, and current task, sortable by any of them, with a per-agent detail pane and CPU sparkline. Columns drop gracefully on narrow terminals.
+
+Both views share the same discovery engine, updated every couple of seconds.
+
+## Also included
 
 ```bash
-agent-office --once             # one discovery pass, human-readable
-agent-office --once --json      # machine-readable snapshot (with cpu/mem/runtime)
-agent-office --watch            # stream lifecycle events as NDJSON
-agent-office --history          # summarize recorded past sessions
+ai-office --once            # one discovery pass, human-readable
+ai-office --once --json     # machine-readable snapshot (cpu/mem/runtime/task)
+ai-office --watch           # headless: stream lifecycle events as NDJSON
+ai-office --history         # what ran while you were away
 ```
 
-Install the command locally:
+`--watch` emits one JSON object per line for every agent lifecycle event — `started`, `status`, `stopped` (with runtime), perfect for piping:
 
 ```bash
-npm link
-agent-office --demo
+ai-office --watch | jq 'select(.type == "stopped") | {tool: .toolName, session: .sessionName, ran: .runtimeMs}'
 ```
+
+Completed sessions are appended to `~/.ai-office/history.jsonl` (disable with `--no-history`), and `--history` summarizes them by tool and project.
 
 ## Controls
 
 ```text
-q / Ctrl-C    quit                 r    rescan now
-tab / ↓ →     select next          ← ↑  select previous
-d / o         office ⇄ dashboard   h    help
-p             pause animation      v    toggle route overlay
-/             filter sessions      s    cycle dashboard sort
-k             signal agent         c    show "cd <project>" hint
-esc           close help / clear filter
+q / Ctrl-C   quit                    r     rescan now
+tab / ↓ →    select next agent      ← ↑   select previous
+d / o        office ⇄ dashboard      s     cycle dashboard sort
+/            filter sessions         esc   close help / clear filter
+k            signal agent (TERM/INT/KILL)
+c            show a "cd <project>" hint
+p            pause animation         h     help
 ```
 
-Dashboard sort keys cycle through: `cpu · mem · runtime · tool · status · name`.
+There's also a terminal bell + toast when an agent finishes, and an optional idle alert (`idleAlertMs`).
 
-## Modes In Detail
+## What it detects, and how
 
-### Dashboard
+The scanner reads process metadata — `ps` on macOS/Linux, a PowerShell CIM query on Windows — and classifies likely agents:
 
-The dashboard is the "real tool" surface: one row per agent with `STATUS`, `TOOL`,
-`SESSION`, `CPU`, `MEM`, `RUNTIME`, `PID`, `PROJECT`, and `TASK`. Columns drop
-gracefully on narrow terminals (task → pid → runtime → mem → project, with CPU and
-the core identity columns kept longest). The header shows totals and a CPU
-sparkline; the bottom pane details the selected agent, including its command,
-model, and per-agent CPU history.
+| Agent | Surfaces |
+| --- | --- |
+| Claude Code | terminal |
+| Claude Desktop | app (macOS, Windows incl. MS Store build) |
+| Codex | CLI + desktop app |
+| Cursor | app + helpers, grouped |
+| Aider, Gemini, Goose, OpenCode, Qwen, Amp, … | terminal |
+| Anything of yours | via `customTools` config |
 
-### Watch (headless / scripting)
+Helper processes are grouped under their app, and CPU/memory are summed across the group.
 
-`--watch` runs no UI. It scans on the configured interval and prints one JSON
-object per line for every lifecycle event:
+For names and tasks, it reads the agents' **local session metadata** (Claude Code project JSONL, Codex session index/rollouts, Claude Desktop session files, Cursor workspaces) and matches sessions to processes by project path, session id, and start-time correlation — so three simultaneous Claude Code sessions each get their own name, even on Windows where process working directories aren't readable. On macOS it can also read terminal tab titles (the exact title Claude Code/Codex set) via AppleScript.
 
-```bash
-agent-office --watch --scan-interval 1000 | jq 'select(.type=="stopped")'
-```
+Everything is best-effort and confidence-scored; an agent that can't be identified still shows up, just with a generic name.
 
-Event types: `watch-start`, `started`, `status` (with `previousStatus`),
-`stopped` (with `runtimeMs`), `error`, `watch-stop`. Stop with Ctrl-C.
+## Privacy
 
-### History
+`ai-office` is local-only. **No telemetry, no network calls, ever.** No keylogging, no clipboard access, no screen recording.
 
-Completed sessions are recorded to JSONL (one line per finished session) and can
-be summarized:
-
-```bash
-agent-office --history          # by tool, top projects, recent sessions
-agent-office --history --json   # structured summary
-agent-office --history 25       # widen the "recent" list
-```
-
-Disable recording with `--no-history` or `"enableHistory": false` in config.
-
-## What It Detects
-
-The scanner is best-effort and conservative. It reads running processes with:
-
-```bash
-ps -ww -axo pid=,ppid=,stat=,etime=,%cpu=,%mem=,rss=,command=
-```
-
-`%cpu`, `%mem`, and `rss` provide the live metrics; the rest provide identity,
-status, and runtime. For likely agent processes it also attempts a short local
-`cwd` lookup with `lsof` for a useful project label, falling back to process
-arguments when `lsof` is unavailable.
-
-By default it also reads local session metadata caches for richer labels:
-
-- Codex `~/.codex/session_index.jsonl`, `~/.codex/history.jsonl`, and recent rollout JSONL files
-- Claude Code `~/.claude/projects/**/*.jsonl`
-- Claude Desktop local agent session JSON under `~/Library/Application Support/Claude`
-- Cursor recent `workspaceStorage/**/workspace.json`
-
-Set `"enableSessionMetadataScan": false` to use process metadata only.
-
-Provider modules classify Codex CLI/Desktop, Claude Code/Desktop, Cursor and its
-helpers, common terminal agents (Aider, Gemini, Goose, OpenCode, Qwen, …), custom
-tools from config, and generic unknown terminal-launched AI commands. For each
-detected agent it derives tool name, session label/title, current task and tool
-call (when metadata exposes one), project path, PID and grouped helper PIDs,
-status, runtime, CPU/memory, and whether it runs in a terminal or a desktop app.
-
-## Privacy Boundaries
-
-`agent-office` is local-only.
-
-- No telemetry. No network calls. No cloud calls.
-- No keylogging. No clipboard access. No screen recording.
-- The `c` "cd hint" prints a path on screen for you to copy manually — it does **not** touch the clipboard.
-
-By default it reads process metadata and local AI-tool session metadata files so
-it can show titles, tasks, tool calls, and workspace names. Set
-`"enableSessionMetadataScan": false` to use process metadata only.
-
-Session history is stored locally at `~/.agent-office/history.jsonl` and records
-only tool name, session/title, project label, PID, and timing — never file
-contents. Disable it with `--no-history`.
-
-Optional `sessionFolderPaths` reads one directory level of file/folder names plus
-modification times. It does not open arbitrary project files. Debug logging is
-opt-in with `--debug` and writes to `~/.agent-office/agent-office.log`.
+It reads: the process table, and (by default) the local session-metadata files the agent tools already keep on your disk — to show titles, tasks, and project names. Set `"enableSessionMetadataScan": false` to use process metadata only. Session history stores tool name, title, project label, PID, and timing — never file contents.
 
 ## Configuration
 
-Default config path:
-
-```text
-~/.agent-office/config.json
-```
-
-Or pass a path: `agent-office --config ./config/agent-office.example.json`.
+Config lives at `~/.ai-office/config.json` (or pass `--config <path>`). Everything is optional:
 
 ```json
 {
   "scanIntervalMs": 2000,
   "stoppedGraceMs": 10000,
-  "enableWindowTitleScan": false,
   "enableSessionMetadataScan": true,
+  "enableWindowTitleScan": true,
   "enableHistory": true,
-  "historyPath": "~/.agent-office/history.jsonl",
   "bellOnFinish": true,
   "idleAlertMs": 0,
   "defaultView": "office",
-  "sessionFolderPaths": [],
-  "excludePatterns": ["agent-office"],
-  "terminalAgentKeywords": ["claude", "claude-code", "codex", "aider", "gemini", "goose", "opencode"],
   "customTools": [
     {
       "key": "my-agent",
       "name": "My Agent",
-      "icon": "M",
       "color": "magenta",
       "processNames": ["my-agent"],
-      "commandPatterns": ["my-agent", "regex:\\bmy-ai-tool\\b"],
-      "windowTitlePatterns": [],
-      "sessionFolderPaths": []
+      "commandPatterns": ["my-agent", "regex:\\bmy-ai-tool\\b"]
     }
   ]
 }
@@ -199,55 +125,47 @@ Or pass a path: `agent-office --config ./config/agent-office.example.json`.
 | Key | Default | Meaning |
 | --- | --- | --- |
 | `scanIntervalMs` | `2000` | Process scan cadence. |
-| `stoppedGraceMs` | `10000` | How long a stopped agent lingers before disappearing. |
-| `enableSessionMetadataScan` | `true` | Read local session caches for richer labels. |
-| `enableWindowTitleScan` | `true` | Read terminal tab titles (macOS) to name terminal agents. |
+| `stoppedGraceMs` | `10000` | How long a finished agent lingers before walking out. |
+| `enableSessionMetadataScan` | `true` | Read local session caches for names/tasks. |
+| `enableWindowTitleScan` | `true` | Read terminal tab titles (macOS only). |
 | `enableAppWindowTitleScan` | `false` | Read desktop app window titles (macOS, needs Accessibility). |
-| `enableHistory` | `true` | Append completed sessions to `historyPath`. |
-| `historyPath` | `~/.agent-office/history.jsonl` | Where session history is written. |
-| `bellOnFinish` | `true` | Ring the terminal bell when an agent finishes (and on idle alerts). |
-| `idleAlertMs` | `0` | Alert once when an agent stays idle this long (ms). `0` disables. |
-| `defaultView` | `"office"` | Initial view: `"office"` or `"dashboard"`. |
-| `customTools` | `[]` | Extra detectors. `commandPatterns` are substring matches; prefix `regex:` for a regex. |
+| `enableHistory` | `true` | Record completed sessions to `~/.ai-office/history.jsonl`. |
+| `bellOnFinish` | `true` | Terminal bell when an agent finishes. |
+| `idleAlertMs` | `0` | Alert when an agent idles this long (`0` = off). |
+| `defaultView` | `"office"` | `"office"` or `"dashboard"`. |
+| `customTools` | `[]` | Extra detectors; `commandPatterns` are substrings, prefix `regex:` for regex. |
 
-CLI flags override config: `--scan-interval`, `--dashboard`, `--no-history`, `--filter <text>`.
+CLI flags override config: `--scan-interval`, `--dashboard`, `--no-history`, `--filter <text>`, `--debug`.
 
 ## Architecture
 
 ```text
-bin/agent-office.js              CLI entry point (TUI, --once, --watch, --history)
-src/config/                      config loading, defaults, normalization
-src/discovery/                   process scanning (+cpu/mem/rss), metadata enrichment, process tree
-src/detection/                   classifier and provider modules
-src/state/store.js               cross-scan state, metrics history, lifecycle events
-src/state/history.js             JSONL session history recorder + summaries
-src/demo.js                      fake agents for visual testing
-src/tui/app.js                   Blessed app: views, filtering, sorting, actions, alerts
-src/tui/designRenderer.js        animated ASCII office renderer
-src/tui/dashboard.js             metrics table renderer (sort/filter/detail)
-src/util/                        text, time, and metric formatting helpers
-test/                            classifier, metadata, renderer, dashboard, store, history, scanner, cli tests
+bin/ai-office.js        CLI entry: TUI, --once, --watch, --history
+src/discovery/          process scanners (ps / PowerShell CIM), cwd + session metadata, titles
+src/detection/          provider modules that classify processes into agents
+src/state/              cross-scan store, lifecycle events, JSONL history
+src/tui/office.js       the animated office renderer
+src/tui/dashboard.js    the metrics table renderer
+src/tui/theme.js        one palette for everything
+src/demo.js             fake agents for --demo
 ```
 
-To add a detector: create a module in `src/detection/providers/`, return a
-candidate with `makeCandidate()` from `src/detection/helpers.js`, register it in
-`PROVIDERS` in `src/detection/index.js`, and add tests in
-`test/classifier.test.js`.
-
-## Limitations
-
-- Status is inferred from process state, not private session internals.
-- CPU% reflects the OS `ps` sampling (recent average), not an instantaneous reading.
-- Project paths are derived from command-line arguments / `lsof` and may be missing.
-- macOS desktop apps spawn many helpers; Codex/Claude Desktop and Cursor helpers are grouped (and their metrics summed) when the process tree is visible.
-- Window-title detection is represented in config for future detectors but is off by default (OS APIs can require accessibility permissions).
-- Linux works wherever the `ps` invocation is supported. Windows needs a new process scanner module.
-
-## Development
+To add a detector: drop a module in `src/detection/providers/`, return a candidate via `makeCandidate()`, register it in `src/detection/index.js`, add a test. To regenerate the README animation: `node scripts/render-svg.js`.
 
 ```bash
 npm install
-npm test       # node --test (classifier, store, history, dashboard, scanner, renderer, cli)
-npm run check  # syntax check every file
+npm test        # node --test
+npm run check   # syntax-check every file
 npm run demo
 ```
+
+## Limitations
+
+- Status is inferred from process state and session-file activity, not private APIs — "idle" means *the session file has gone quiet*, not that the model told us so.
+- CPU% is sampled between scans; the first reading for a process is its lifetime average.
+- On Windows, project paths come from session metadata (there's no `lsof`), so an agent with no readable session may show without a project.
+- Desktop apps spawn many helpers; grouping depends on the process tree being visible.
+
+## License
+
+MIT © Tobias Preisler

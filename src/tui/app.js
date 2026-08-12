@@ -2,7 +2,8 @@ const blessed = require('blessed');
 const { AgentStore } = require('../state/store');
 const { HistoryRecorder } = require('../state/history');
 const { formatDuration } = require('../util/time');
-const { renderHelp, renderOffice } = require('./renderers');
+const { renderHelp } = require('./help');
+const { renderOffice } = require('./office');
 const {
   SORT_KEYS,
   filterAgents,
@@ -21,7 +22,7 @@ async function startTui({ config, discovery, logger, options }) {
   const screen = blessed.screen({
     smartCSR: true,
     fullUnicode: true,
-    title: 'Agent Office',
+    title: 'ai-office',
   });
 
   const view = blessed.box({ tags: true, scrollable: false });
@@ -56,7 +57,6 @@ async function startTui({ config, discovery, logger, options }) {
   let closed = false;
   let scanInFlight = false;
   let lastScanLabel = 'never';
-  let showDebugRoutes = false;
   let sortKey = 'cpu';
   let filter = String(options.filter || '');
   let inputMode = null; // null | 'filter' | 'signal'
@@ -143,7 +143,6 @@ async function startTui({ config, discovery, logger, options }) {
         now: visualNow,
         selectedId: store.selectedId,
         paused,
-        showDebugRoutes,
         filter,
       }));
     }
@@ -405,7 +404,6 @@ async function startTui({ config, discovery, logger, options }) {
   screen.key(['left', 'up'], gated(() => moveSelection(-1)));
   screen.key('h', gated(() => { help.hidden = !help.hidden; render(); }));
   screen.key('p', gated(() => { paused = !paused; pausedAt = Date.now(); render(); }));
-  screen.key('v', gated(() => { showDebugRoutes = !showDebugRoutes; render(); }));
   screen.key(['d', 'o'], gated(toggleView));
   screen.key('s', gated(cycleSort));
   screen.key('k', gated(beginSignal));

@@ -1,16 +1,6 @@
 const { makeCandidate } = require('../helpers');
 const { commandInvokes } = require('../helpers');
-
-const COLOR_BY_KEYWORD = {
-  aider: 'yellow',
-  amp: 'magenta',
-  claude: 'yellow',
-  'claude-code': 'yellow',
-  gemini: 'cyan',
-  goose: 'white',
-  opencode: 'magenta',
-  qwen: 'blue',
-};
+const { vendorColor } = require('../../tui/theme');
 
 function classifyTerminalAgent(proc, context, config) {
   const keywords = config.terminalAgentKeywords || [];
@@ -33,7 +23,7 @@ function classifyTerminalAgent(proc, context, config) {
     toolKey: key,
     toolName: displayName(matched),
     icon: key.slice(0, 1).toUpperCase(),
-    color: COLOR_BY_KEYWORD[key] || 'yellow',
+    color: vendorColor(key),
     confidence: inTerminal ? 0.8 : 0.65,
     source: 'terminal-agent-detector',
     fallbackPrefix: key,

@@ -45,7 +45,13 @@ function isClaudeDesktopRoot(proc) {
   const lower = proc.lowerCommand || '';
   return /\/applications\/claude\.app\/contents\/macos\/claude(?:\s|$)/i.test(command)
     || /\/applications\/claude desktop\.app\/contents\/macos\//i.test(command)
-    || lower.includes('com.anthropic.claude');
+    || lower.includes('com.anthropic.claude')
+    // Windows (Microsoft Store / MSIX): the main app binary lives under
+    // WindowsApps\Claude_… or the package LocalCache. The browser-extension
+    // native host lives there too but is not the app.
+    || (/[\\/](windowsapps|packages)[\\/]claude_/i.test(command)
+      && /claude\.exe/i.test(command)
+      && !lower.includes('chrome-native-host'));
 }
 
 function isClaudeDesktopProcess(proc) {
@@ -55,7 +61,8 @@ function isClaudeDesktopProcess(proc) {
   return /\/applications\/claude\.app\//i.test(command)
     || /\/applications\/claude desktop\.app\//i.test(command)
     || lower.includes('com.anthropic.claude')
-    || name.startsWith('claude helper');
+    || name.startsWith('claude helper')
+    || /[\\/](windowsapps|packages)[\\/]claude_/i.test(command);
 }
 
 function isClaudeCodeProcess(proc) {

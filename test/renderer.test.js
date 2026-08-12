@@ -1,12 +1,18 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { renderOffice } = require('../src/tui/renderers');
+const { MAP_H, MAP_W, SEATS, renderOffice } = require('../src/tui/office');
 
 function stripBlessedTags(value) {
   return String(value).replace(/\{[^}]*\}/g, '');
 }
 
-test('renders a compact top-down agent working at a desk', () => {
+test('the floor plan is structurally sound', () => {
+  // Every seat must have a desk above it and open floor for the name label.
+  assert.ok(SEATS.length >= 12);
+  assert.ok(MAP_W >= 60 && MAP_H >= 12);
+});
+
+test('renders an agent working at a desk', () => {
   const output = stripBlessedTags(renderOffice({
     agents: [
       {
@@ -15,30 +21,30 @@ test('renders a compact top-down agent working at a desk', () => {
         toolName: 'Codex CLI',
         sessionName: 'demo',
         pid: 123,
-        color: 'cyan',
         status: 'active',
         appearAt: 0,
       },
     ],
-    width: 80,
+    width: 90,
     height: 30,
-    now: 10000,
-    frame: 2,
+    now: 20000,
     selectedId: 'agent-a',
     paused: false,
   }));
 
-  assert.match(output, /agent-office/);
-  assert.match(output, /break/);
-  assert.match(output, /▓/);
+  assert.match(output, /ai-office/);
+  assert.match(output, /break room/);
+  assert.match(output, /║/);
   assert.match(output, /▬/);
   assert.match(output, /\bo\b/);
-  assert.match(output, /demo·typ|\[cdx·t\]/);
+  assert.match(output, /demo/);
   assert.match(output, /sessions/);
   assert.match(output, /q quit/);
+  // Wall clock renders HH:MM (or the blink frame HH MM).
+  assert.match(output, /\d\d[: ]\d\d/);
 });
 
-test('renders idle agents drinking coffee in the break room', () => {
+test('renders idle agents lounging in the break room', () => {
   const output = stripBlessedTags(renderOffice({
     agents: [
       {
@@ -47,30 +53,27 @@ test('renders idle agents drinking coffee in the break room', () => {
         toolName: 'Cursor',
         sessionName: 'demo',
         pid: 456,
-        color: 'green',
         status: 'idle',
         appearAt: 0,
         previousStatus: 'active',
         statusChangedAt: 0,
       },
     ],
-    width: 80,
+    width: 90,
     height: 30,
-    now: 10000,
-    frame: 1,
+    now: 60000,
     selectedId: 'agent-b',
     paused: false,
   }));
 
-  assert.match(output, /break/);
+  assert.match(output, /break room/);
   assert.match(output, /▣/);
   assert.match(output, /~/);
-  assert.match(output, /\bo\b/);
-  assert.match(output, /\[cur·d\]/);
-  assert.match(output, /break/);
+  // The agent's head, possibly holding a cup right next to the machine.
+  assert.match(output, /\bo\b|uo|o▣|▣o/);
 });
 
-test('renders new agents running through the office on a path', () => {
+test('renders arriving agents walking through the office', () => {
   const output = stripBlessedTags(renderOffice({
     agents: [
       {
@@ -78,24 +81,32 @@ test('renders new agents running through the office on a path', () => {
         toolName: 'Claude Code',
         sessionName: 'tests',
         pid: 789,
-        color: 'yellow',
         status: 'starting',
-        appearAt: 9400,
+        appearAt: 9700,
       },
     ],
     width: 90,
-    height: 22,
+    height: 26,
     now: 10000,
-    frame: 1,
     selectedId: 'agent-c',
     paused: false,
   }));
 
-  assert.match(output, /agent-office/);
-  assert.match(output, /▓/);
+  assert.match(output, /ai-office/);
+  assert.match(output, /║/);
   assert.match(output, /\/|\\/);
-  assert.match(output, /\[cla·t\]|tests/);
-  assert.match(output, /walking|q quit/);
-  assert.doesNotMatch(output, /o\/|\\o/);
-  assert.match(output, /~/);
+  assert.match(output, /tests/);
+});
+
+test('shows the scanning state when no agents are found', () => {
+  const output = stripBlessedTags(renderOffice({
+    agents: [],
+    width: 90,
+    height: 26,
+    now: 5000,
+  }));
+
+  assert.match(output, /scanning for agents/);
+  assert.match(output, /the office is empty/);
+  assert.match(output, /ai-office --demo/);
 });

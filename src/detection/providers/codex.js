@@ -19,7 +19,7 @@ function classifyCodex(proc, context) {
       toolKey: 'codex-desktop',
       toolName: 'Codex Desktop',
       icon: 'D',
-      color: 'blue',
+      color: 'cyan',
       confidence: 0.9,
       source: 'codex-detector',
       surface: 'desktop',
