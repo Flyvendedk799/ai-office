@@ -1,5 +1,5 @@
 {
-  "name": "ai-office",
+  "name": "@flyvende/ai-office",
   "version": "2.1.0",
   "description": "See every AI coding agent on your machine as a tiny animated ASCII office — plus a live metrics dashboard, session history, and a headless event stream.",
   "main": "src/index.js",
