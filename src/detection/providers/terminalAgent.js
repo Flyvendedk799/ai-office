@@ -28,7 +28,7 @@ function classifyTerminalAgent(proc, context, config) {
     source: 'terminal-agent-detector',
     fallbackPrefix: key,
     idSeed: `${key}:${proc.pid}`,
-  });
+  }, context);
 }
 
 function displayName(value) {

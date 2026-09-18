@@ -21,7 +21,7 @@ function classifyCursor(proc, context) {
     surface: 'desktop',
     fallbackPrefix: 'cursor',
     idSeed: `cursor:desktop:${root.pid || 'app'}`,
-  });
+  }, context);
 }
 
 function isCursorDesktopRoot(proc) {

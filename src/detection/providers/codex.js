@@ -25,7 +25,7 @@ function classifyCodex(proc, context) {
       surface: 'desktop',
       fallbackPrefix: 'codex-app',
       idSeed: `codex-desktop:${root.pid || 'app'}`,
-    });
+    }, context);
   }
 
   const root = context.findAncestor(proc, isCodexCliProcess) || proc;
@@ -41,7 +41,7 @@ function classifyCodex(proc, context) {
     surface: 'terminal',
     fallbackPrefix: 'codex',
     idSeed: `codex-cli:${root.pid}`,
-  });
+  }, context);
 }
 
 function isCodexDesktopRoot(proc) {

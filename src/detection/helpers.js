@@ -62,7 +62,7 @@ function cleanProjectPath(value) {
   return String(value).replace(/^['"]|['"]$/g, '').replace(/\/$/, '');
 }
 
-function deriveSessionName(proc, projectPath, fallbackPrefix) {
+function deriveSessionName(proc, projectPath, fallbackPrefix, context) {
   const args = splitCommand(proc.command);
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index];
@@ -72,6 +72,19 @@ function deriveSessionName(proc, projectPath, fallbackPrefix) {
     const inline = arg.match(/^--(?:session|session-id|title|name)=(.+)$/);
     if (inline) {
       return inline[1];
+    }
+  }
+
+  // Windows terminal title fallback
+  if (context) {
+    const { isGenericTitle, cleanTitle } = require('../discovery/terminalTitles');
+    const chain = context.parentChain(proc, 12);
+    for (const parent of chain) {
+      if (context.isTerminalHost(parent) && parent.windowTitle) {
+        if (!isGenericTitle(parent.windowTitle)) {
+          return cleanTitle(parent.windowTitle);
+        }
+      }
     }
   }
 
@@ -88,10 +101,10 @@ function deriveSessionName(proc, projectPath, fallbackPrefix) {
   return `${prefix}-${proc.pid}`;
 }
 
-function makeCandidate(proc, fields) {
+function makeCandidate(proc, fields, context) {
   const hasProjectPath = Object.prototype.hasOwnProperty.call(fields, 'projectPath');
   const projectPath = hasProjectPath ? fields.projectPath : deriveProjectPath(proc);
-  const sessionName = fields.sessionName || deriveSessionName(proc, projectPath, fields.fallbackPrefix);
+  const sessionName = fields.sessionName || deriveSessionName(proc, projectPath, fields.fallbackPrefix, context);
   const idSeed = fields.idSeed || `${fields.toolKey}:${projectPath || sessionName || proc.pid}`;
 
   return {
