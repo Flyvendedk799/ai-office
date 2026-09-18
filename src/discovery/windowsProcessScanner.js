@@ -10,6 +10,13 @@ const execFileAsync = promisify(execFile);
 // (first scan falls back to the lifetime average, like `ps` on Linux).
 const PS_SCRIPT = `
 [Console]::OutputEncoding = [Text.Encoding]::UTF8
+$gps = Get-Process | Select-Object Id, MainWindowTitle
+$titles = @{}
+foreach ($p in $gps) {
+  if ([string]::IsNullOrWhiteSpace($p.MainWindowTitle) -eq $false) {
+    $titles[$p.Id] = $p.MainWindowTitle
+  }
+}
 $list = Get-CimInstance Win32_Process | ForEach-Object {
   [pscustomobject]@{
     pid = [int]$_.ProcessId
@@ -19,6 +26,7 @@ $list = Get-CimInstance Win32_Process | ForEach-Object {
     rssKb = [long]($_.WorkingSetSize / 1024)
     startMs = if ($_.CreationDate) { [long]([DateTimeOffset]$_.CreationDate).ToUnixTimeMilliseconds() } else { 0 }
     cpuMs = [long](($_.KernelModeTime + $_.UserModeTime) / 10000)
+    windowTitle = if ($titles.Contains($_.ProcessId)) { $titles[$_.ProcessId] } else { "" }
   }
 }
 ConvertTo-Json -InputObject @($list) -Compress -Depth 3
@@ -114,6 +122,7 @@ function toProcess(row, now, samples, totalMemKb) {
     name,
     lowerCommand: command.toLowerCase(),
     lowerName: name.toLowerCase(),
+    windowTitle: String(row.windowTitle || '').trim() || undefined,
   };
 }
 

@@ -15,7 +15,7 @@ function classifyCustom(proc, context, config) {
       source: 'custom-config',
       fallbackPrefix: tool.key,
       idSeed: `${tool.key}:${proc.pid}`,
-    });
+    }, context);
   }
 
   return null;

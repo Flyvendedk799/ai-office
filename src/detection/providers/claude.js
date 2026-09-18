@@ -18,7 +18,7 @@ function classifyClaude(proc, context) {
       surface: 'desktop',
       fallbackPrefix: 'claude-app',
       idSeed: `claude-desktop:${root.pid || 'app'}`,
-    });
+    }, context);
   }
 
   if (!isClaudeCodeProcess(proc) || !context.hasTerminalAncestor(proc)) {
@@ -37,7 +37,7 @@ function classifyClaude(proc, context) {
     surface: 'terminal',
     fallbackPrefix: 'claude',
     idSeed: `claude-code:${root.pid}`,
-  });
+  }, context);
 }
 
 function isClaudeDesktopRoot(proc) {

@@ -20,7 +20,7 @@ function classifyGeneric(proc, context) {
     source: 'generic-detector',
     fallbackPrefix: 'agent',
     idSeed: `unknown:${proc.pid}`,
-  });
+  }, context);
 }
 
 module.exports = {

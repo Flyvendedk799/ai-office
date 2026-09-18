@@ -241,6 +241,7 @@ function isGenericTitle(title) {
     return true;
   }
   return /^(-?(z|ba|fi)?sh|login|tmux|screen|terminal|agent office)$/.test(text)
+    || /^(windows powershell|command prompt|administrator: .*)$/.test(text)
     || /\b\d+×\d+\b/.test(text);
 }
 
