@@ -4,21 +4,20 @@ const { findDesktopAppRoot } = require('./desktopApp');
 function classifyClaude(proc, context) {
   if (isClaudeDesktopProcess(proc)) {
     const root = findDesktopAppRoot(proc, context, isClaudeDesktopRoot);
-    if (!root) {
-      return null;
+    if (root) {
+      return makeCandidate(proc, {
+        id: `claude-desktop:${root.pid || 'app'}`,
+        toolKey: 'claude-desktop',
+        toolName: 'Claude Desktop',
+        icon: 'C',
+        color: 'yellow',
+        confidence: 0.9,
+        source: 'claude-detector',
+        surface: 'desktop',
+        fallbackPrefix: 'claude-app',
+        idSeed: `claude-desktop:${root.pid || 'app'}`,
+      }, context);
     }
-    return makeCandidate(proc, {
-      id: `claude-desktop:${root.pid || 'app'}`,
-      toolKey: 'claude-desktop',
-      toolName: 'Claude Desktop',
-      icon: 'C',
-      color: 'yellow',
-      confidence: 0.9,
-      source: 'claude-detector',
-      surface: 'desktop',
-      fallbackPrefix: 'claude-app',
-      idSeed: `claude-desktop:${root.pid || 'app'}`,
-    }, context);
   }
 
   if (!isClaudeCodeProcess(proc) || !context.hasTerminalAncestor(proc)) {
@@ -46,12 +45,14 @@ function isClaudeDesktopRoot(proc) {
   return /\/applications\/claude\.app\/contents\/macos\/claude(?:\s|$)/i.test(command)
     || /\/applications\/claude desktop\.app\/contents\/macos\//i.test(command)
     || lower.includes('com.anthropic.claude')
-    // Windows (Microsoft Store / MSIX): the main app binary lives under
-    // WindowsApps\Claude_… or the package LocalCache. The browser-extension
-    // native host lives there too but is not the app.
+    // Windows (Microsoft Store / MSIX)
     || (/[\\/](windowsapps|packages)[\\/]claude_/i.test(command)
       && /claude\.exe/i.test(command)
-      && !lower.includes('chrome-native-host'));
+      && !lower.includes('chrome-native-host'))
+    // Windows (Standard Installer)
+    || (/[\\/]Claude[\\/]Claude\.exe/i.test(command))
+    // Generic check for claude.exe running as desktop app
+    || (!proc.tty && /claude\.exe/i.test(proc.name));
 }
 
 function isClaudeDesktopProcess(proc) {
@@ -62,7 +63,9 @@ function isClaudeDesktopProcess(proc) {
     || /\/applications\/claude desktop\.app\//i.test(command)
     || lower.includes('com.anthropic.claude')
     || name.startsWith('claude helper')
-    || /[\\/](windowsapps|packages)[\\/]claude_/i.test(command);
+    || /[\\/](windowsapps|packages)[\\/]claude_/i.test(command)
+    || /[\\/]Claude[\\/]/i.test(command)
+    || /claude\.exe/i.test(name);
 }
 
 function isClaudeCodeProcess(proc) {

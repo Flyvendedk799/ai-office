@@ -77,7 +77,14 @@ function deriveSessionName(proc, projectPath, fallbackPrefix, context) {
 
   // Windows terminal title fallback
   if (context) {
-    const { isGenericTitle, cleanTitle } = require('../discovery/terminalTitles');
+    const { isGenericTitle, cleanTitle, isGenericWindowTitle, cleanWindowTitle } = require('../discovery/terminalTitles');
+    
+    // 1. If this process itself has a window title (e.g. Claude Desktop app)
+    if (proc.windowTitle && !isGenericWindowTitle(proc.windowTitle)) {
+      return cleanWindowTitle(proc.windowTitle, proc.lowerName);
+    }
+    
+    // 2. If this process is running inside a terminal host (e.g. Claude Code in powershell)
     const chain = context.parentChain(proc, 12);
     for (const parent of chain) {
       if (context.isTerminalHost(parent) && parent.windowTitle) {
