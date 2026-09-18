@@ -75,8 +75,11 @@ function mergeCandidates(candidates) {
       existing.projectPath = candidate.projectPath;
       existing.projectLabel = candidate.projectLabel;
     }
-    if ((!existing.sessionName || existing.sessionName === 'desktop-app') && candidate.sessionName) {
-      existing.sessionName = candidate.sessionName;
+    if (!existing.sessionName || existing.sessionName === 'desktop-app' || (candidate.hasRealSessionName && !existing.hasRealSessionName)) {
+      if (candidate.sessionName) {
+        existing.sessionName = candidate.sessionName;
+        existing.hasRealSessionName = candidate.hasRealSessionName || existing.hasRealSessionName;
+      }
     }
     if (!existing.surface && candidate.surface) {
       existing.surface = candidate.surface;

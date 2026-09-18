@@ -16,13 +16,15 @@ test('stopped and zombie processes are not active', () => {
 });
 
 test('session name falls back to the tty when there is no project', () => {
-  const proc = { pid: 1011, name: 'claude', command: 'claude', tty: 's000' };
-  assert.equal(deriveSessionName(proc, undefined, 'claude'), 'claude@s000');
+  const result = deriveSessionName({ pid: 1011, name: 'claude', tty: 's000', command: 'claude' }, undefined, undefined, undefined);
+  assert.strictEqual(result.name, 'claude@s000');
+  assert.strictEqual(result.isReal, true);
 });
 
 test('session name falls back to the pid when there is no tty', () => {
-  const proc = { pid: 1011, name: 'claude', command: 'claude' };
-  assert.equal(deriveSessionName(proc, undefined, 'claude'), 'claude-1011');
+  const result = deriveSessionName({ pid: 1011, name: 'claude', command: 'claude' }, undefined, undefined, undefined);
+  assert.strictEqual(result.name, 'claude-1011');
+  assert.strictEqual(result.isReal, false);
 });
 
 test('candidate carries tty and an active status from process state', () => {
