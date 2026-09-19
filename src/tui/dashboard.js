@@ -304,8 +304,13 @@ function sessionName(agent) {
 // distinct from the live task shown in the TASK column.
 function identityName(agent) {
   const project = agent.projectLabel || agent.projectPath;
-  const base = project ? String(project).split(/[\\/]/).filter(Boolean).pop() : '';
-  return String(agent.title || agent.sessionName || agent.terminalTitle || base || agent.toolName || 'session');
+  const base = project ? String(project).split(/[/\\]/).filter(Boolean).pop() : '';
+  const title = String(agent.title || agent.sessionName || agent.terminalTitle || agent.toolName || 'session');
+  
+  if (base && title && !title.toLowerCase().includes(base.toLowerCase()) && title !== base) {
+    return `${title} [${base}]`;
+  }
+  return title || base;
 }
 
 function taskText(agent) {
