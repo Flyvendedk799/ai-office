@@ -34,7 +34,8 @@ function deriveProjectPath(proc) {
   const likelyPaths = args
     .filter((arg) => /^(~|\/|[A-Za-z]:\\)/.test(arg))
     .filter((arg) => !/\/(Applications|System|Library|usr|bin|sbin)\//.test(arg))
-    .filter((arg) => !/\.(js|mjs|cjs|ts|json|log|lock)$/i.test(arg));
+    .filter((arg) => !/\.(js|mjs|cjs|ts|json|log|lock|exe|cmd|bat|ps1|sh)$/i.test(arg))
+    .filter((arg) => !/^\/prefetch:\d+$/i.test(arg));
 
   if (likelyPaths.length > 0) {
     return cleanProjectPath(likelyPaths[likelyPaths.length - 1]);
@@ -67,11 +68,11 @@ function deriveSessionName(proc, projectPath, fallbackPrefix, context) {
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index];
     if (['--session', '--session-id', '--title', '--name'].includes(arg) && args[index + 1]) {
-      return args[index + 1];
+      return { name: args[index + 1], isReal: true };
     }
     const inline = arg.match(/^--(?:session|session-id|title|name)=(.+)$/);
     if (inline) {
-      return inline[1];
+      return { name: inline[1], isReal: true };
     }
   }
 
@@ -81,7 +82,7 @@ function deriveSessionName(proc, projectPath, fallbackPrefix, context) {
     
     // 1. If this process itself has a window title (e.g. Claude Desktop app)
     if (proc.windowTitle && !isGenericWindowTitle(proc.windowTitle)) {
-      return cleanWindowTitle(proc.windowTitle, proc.lowerName);
+      return { name: cleanWindowTitle(proc.windowTitle, proc.lowerName), isReal: true };
     }
     
     // 2. If this process is running inside a terminal host (e.g. Claude Code in powershell)
@@ -89,29 +90,39 @@ function deriveSessionName(proc, projectPath, fallbackPrefix, context) {
     for (const parent of chain) {
       if (context.isTerminalHost(parent) && parent.windowTitle) {
         if (!isGenericTitle(parent.windowTitle)) {
-          return cleanTitle(parent.windowTitle);
+          return { name: cleanTitle(parent.windowTitle), isReal: true };
         }
       }
     }
   }
 
   if (projectPath) {
-    return path.basename(projectPath);
+    return { name: path.basename(projectPath), isReal: true };
   }
 
   const prefix = fallbackPrefix || proc.name || 'pid';
   // A terminal tab (tty) is the most recognizable handle when there is no
   // project — it lets the user match an agent to the tab they launched it in.
   if (proc.tty) {
-    return `${prefix}@${proc.tty}`;
+    return { name: `${prefix}@${proc.tty}`, isReal: true };
   }
-  return `${prefix}-${proc.pid}`;
+  return { name: `${prefix}-${proc.pid}`, isReal: false };
 }
 
 function makeCandidate(proc, fields, context) {
   const hasProjectPath = Object.prototype.hasOwnProperty.call(fields, 'projectPath');
   const projectPath = hasProjectPath ? fields.projectPath : deriveProjectPath(proc);
-  const sessionName = fields.sessionName || deriveSessionName(proc, projectPath, fields.fallbackPrefix, context);
+  
+  let sessionName = fields.sessionName;
+  let hasRealSessionName = false;
+  if (sessionName) {
+    hasRealSessionName = true;
+  } else {
+    const derived = deriveSessionName(proc, projectPath, fields.fallbackPrefix, context);
+    sessionName = derived.name;
+    hasRealSessionName = derived.isReal;
+  }
+  
   const idSeed = fields.idSeed || `${fields.toolKey}:${projectPath || sessionName || proc.pid}`;
 
   return {
@@ -121,6 +132,7 @@ function makeCandidate(proc, fields, context) {
     icon: fields.icon || '?',
     color: fields.color || 'magenta',
     sessionName,
+    hasRealSessionName,
     projectPath,
     projectLabel: projectPath ? compactHome(projectPath) : '',
     surface: fields.surface || 'terminal',
