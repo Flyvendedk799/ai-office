@@ -305,7 +305,7 @@ function sessionName(agent) {
 function identityName(agent) {
   const project = agent.projectLabel || agent.projectPath;
   const base = project ? String(project).split(/[\\/]/).filter(Boolean).pop() : '';
-  return String(agent.terminalTitle || base || agent.sessionName || agent.toolName || 'session');
+  return String(agent.title || agent.sessionName || agent.terminalTitle || base || agent.toolName || 'session');
 }
 
 function taskText(agent) {
