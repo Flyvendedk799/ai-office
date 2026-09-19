@@ -188,9 +188,16 @@ function sessionMatch(agent, session, vendor, surface, context) {
     const recency = Math.max(0, 22 - Math.floor(ageMs / (60 * 60 * 1000)));
     score += recency;
     if (recency > 0) reasons.push('recent');
+
+    // A session updated during the lifetime of the process is a strong temporal match.
+    // This is crucial on Windows where cwd and window titles are often inaccessible.
+    if (Number.isFinite(agent.startedAt) && session.updatedAt >= agent.startedAt - 15000) {
+      score += 40;
+      reasons.push('active-together');
+    }
   }
 
-  const strong = reasons.some((reason) => ['project', 'cwd', 'session-id', 'title', 'project-name', 'started-together'].includes(reason));
+  const strong = reasons.some((reason) => ['project', 'cwd', 'session-id', 'title', 'project-name', 'started-together', 'active-together'].includes(reason));
   const groupKey = `${vendor}:${surface}`;
   const uniqueWeakMatch = !strong
     && session.vendor === vendor
