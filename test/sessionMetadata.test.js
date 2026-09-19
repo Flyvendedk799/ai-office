@@ -213,7 +213,7 @@ test('gives the last unmatched agent the only remaining live session', () => {
 
   assert.equal(enriched[0].title, 'New session');
   assert.equal(enriched[1].title, 'Resumed session');
-  assert.match(enriched[1].metadataReason, /live-leftover/);
+  assert.match(enriched[1].metadataReason, /active-together/);
 });
 
 test('normalizes Windows paths when matching agent and session projects', () => {
