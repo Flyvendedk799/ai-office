@@ -25,6 +25,7 @@ Usage:
 Run modes:
   (default)               Animated office TUI.
   --dashboard             Start in the dense dashboard (table) view.
+  --activity              Start in the live lifecycle activity feed.
   --watch                 Headless: stream agent lifecycle events as NDJSON.
   --once                  Run one discovery pass and print detected agents.
   --history [n]           Print a summary of recorded past sessions.
@@ -35,6 +36,7 @@ Options:
   --filter <text>         Start the TUI with a session filter applied.
   --debug                 Write debug logs to ~/.ai-office/ai-office.log.
   --no-history            Do not record completed sessions to disk.
+  --reduced-motion        Static scenery and seated agents; keep data live.
   --config <path>         Load a JSON config file.
   --scan-interval <ms>    Override process scan interval.
   --help, -h              Show this help.
@@ -44,6 +46,7 @@ TUI controls:
   q / Ctrl-C  Quit          r  Rescan now       d / o  Office ⇄ Dashboard
   tab/arrows  Select        s  Cycle sort        /      Filter sessions
   k           Signal agent  c  Show cd hint      p      Pause   h  Help
+  e           Activity      m  Reduced motion   o      Office  d  Dashboard
 
 Paths:
   config   ${defaultConfigPath()}
@@ -79,6 +82,10 @@ function parseArgs(argv) {
       options.debug = true;
     } else if (arg === '--dashboard') {
       options.dashboard = true;
+    } else if (arg === '--activity') {
+      options.activity = true;
+    } else if (arg === '--reduced-motion') {
+      options.reducedMotion = true;
     } else if (arg === '--watch') {
       options.watch = true;
     } else if (arg === '--no-history') {
@@ -94,11 +101,13 @@ function parseArgs(argv) {
       options.history = true;
       options.historyLimit = Number(arg.slice('--history='.length));
     } else if (arg === '--filter') {
+      if (!argv[index + 1] || argv[index + 1].startsWith('--')) { options.argumentError = '--filter requires text'; break; }
       options.filter = argv[index + 1];
       index += 1;
     } else if (arg.startsWith('--filter=')) {
       options.filter = arg.slice('--filter='.length);
     } else if (arg === '--config') {
+      if (!argv[index + 1] || argv[index + 1].startsWith('--')) { options.argumentError = '--config requires a path'; break; }
       options.configPath = argv[index + 1];
       index += 1;
     } else if (arg.startsWith('--config=')) {
@@ -136,6 +145,21 @@ async function main() {
     process.exitCode = 2;
     return;
   }
+  if (options.argumentError) {
+    console.error(options.argumentError);
+    process.exitCode = 2;
+    return;
+  }
+  if (options.configPath !== undefined && !options.configPath.trim()) {
+    console.error('--config requires a path');
+    process.exitCode = 2;
+    return;
+  }
+  if (options.historyLimit !== undefined && (!Number.isInteger(options.historyLimit) || options.historyLimit < 1)) {
+    console.error('--history must be a positive integer');
+    process.exitCode = 2;
+    return;
+  }
   if (options.scanIntervalMs !== undefined && (!Number.isFinite(options.scanIntervalMs) || options.scanIntervalMs < 250)) {
     console.error('--scan-interval must be a number >= 250');
     process.exitCode = 2;
@@ -149,6 +173,8 @@ async function main() {
   if (options.noHistory) {
     config.enableHistory = false;
   }
+  if (options.activity) config.defaultView = 'activity';
+  if (options.reducedMotion) config.reducedMotion = true;
 
   if (options.history) {
     printHistorySummary(config, options);
@@ -171,6 +197,11 @@ async function main() {
     return;
   }
 
+  if (!process.stdin.isTTY || !process.stdout.isTTY) {
+    console.error('Interactive terminal required. Use --once --json for a snapshot or --watch for an event stream.');
+    process.exitCode = 2;
+    return;
+  }
   await startTui({ config, discovery, logger, options });
 }
 
@@ -184,15 +215,18 @@ async function runWatch({ config, discovery, logger, options }) {
     logger,
   });
   let stopped = false;
+  let scanning = false;
 
   const emit = (record) => process.stdout.write(`${JSON.stringify(record)}\n`);
 
   async function tick(reason) {
-    if (stopped) {
+    if (stopped || scanning) {
       return;
     }
+    scanning = true;
     try {
       const agents = await discovery.discover();
+      if (stopped) return;
       store.update(agents);
       const events = store.drainEvents();
       history.record(events);
@@ -202,6 +236,8 @@ async function runWatch({ config, discovery, logger, options }) {
     } catch (error) {
       logger.error('watch scan failed', { reason, error: error.message });
       emit({ ts: new Date().toISOString(), type: 'error', message: error.message });
+    } finally {
+      scanning = false;
     }
   }
 

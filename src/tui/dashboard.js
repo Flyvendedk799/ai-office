@@ -1,6 +1,7 @@
 const { formatDuration } = require('../util/time');
-const { truncate } = require('../util/text');
+const { truncate, cleanText, charWidth, textWidth } = require('../util/text');
 const { formatMemoryKb, formatPercent, sparkline } = require('../util/format');
+const { vendorColor } = require('./theme');
 
 const SORT_KEYS = ['cpu', 'mem', 'runtime', 'tool', 'status', 'name'];
 
@@ -31,6 +32,7 @@ const COLUMNS = [
 ];
 
 function agentRuntimeMs(agent, now) {
+  if (agent.status === 'stopped') return agent.runtimeMs || 0;
   if (Number.isFinite(agent.startedAt)) {
     return Math.max(0, now - agent.startedAt);
   }
@@ -73,6 +75,8 @@ function filterAgents(agents, filterText) {
       agent.currentTask,
       agent.activity,
       agent.status,
+      agent.pid,
+      agent.terminalTitle,
       agent.toolCall?.summary,
     ]
       .filter(Boolean)
@@ -94,8 +98,8 @@ function renderDashboard({
   cpuHistory = [],
   paused = false,
 } = {}) {
-  const W = Math.max(40, Math.floor(width || 80));
-  const H = Math.max(8, Math.floor(height || 24));
+  const W = Math.max(1, Math.floor(width || 80));
+  const H = Math.max(1, Math.floor(height || 24));
   const grid = makeGrid(W, H);
 
   const sums = totals || computeTotals(agents);
@@ -128,7 +132,7 @@ function renderDashboard({
 
   const hidden = agents.length - visibleRows;
   if (hidden > 0 && visibleRows > 0) {
-    drawText(grid, W - 12, rowsBottom - 1, `+${hidden} more`, 'yellow');
+    drawText(grid, W - 12, 1, `+${hidden} more`, 'yellow');
   }
 
   if (showDetail) {
@@ -147,8 +151,8 @@ function computeTotals(agents) {
   for (const agent of agents) {
     if (agent.status === 'idle') idle += 1;
     else if (agent.status !== 'stopped') working += 1;
-    if (Number.isFinite(agent.cpu)) cpu += agent.cpu;
-    if (Number.isFinite(agent.rssKb)) rssKb += agent.rssKb;
+    if (agent.status !== 'stopped' && Number.isFinite(agent.cpu)) cpu += agent.cpu;
+    if (agent.status !== 'stopped' && Number.isFinite(agent.rssKb)) rssKb += agent.rssKb;
   }
   return { agents: agents.length, working, idle, cpu: Math.round(cpu * 10) / 10, rssKb };
 }
@@ -247,7 +251,7 @@ function cellFor(key, agent, now) {
     case 'status':
       return { text: `● ${statusWord(agent)}`, color: STATUS_COLOR[agent.status] || 'white' };
     case 'tool':
-      return { text: toolLabel(agent), color: agent.color || 'white' };
+      return { text: toolLabel(agent), color: vendorColor(agent) };
     case 'name':
       return { text: identityName(agent), color: 'white' };
     case 'cpu':
@@ -297,7 +301,7 @@ function toolLabel(agent) {
 }
 
 function sessionName(agent) {
-  return String(agent.title || agent.sessionName || agent.projectLabel || agent.projectPath || agent.toolName || 'session');
+  return String(agent.terminalTitle || agent.title || agent.sessionName || agent.projectLabel || agent.projectPath || agent.toolName || 'session');
 }
 
 // Stable session identity (terminal tab title / project / session name), as
@@ -305,7 +309,7 @@ function sessionName(agent) {
 function identityName(agent) {
   const project = agent.projectLabel || agent.projectPath;
   const base = project ? String(project).split(/[/\\]/).filter(Boolean).pop() : '';
-  const title = String(agent.title || agent.sessionName || agent.terminalTitle || agent.toolName || 'session');
+  const title = String(agent.terminalTitle || agent.title || agent.sessionName || agent.toolName || 'session');
   
   if (base && title && !title.toLowerCase().includes(base.toLowerCase()) && title !== base) {
     return `${title} [${base}]`;
@@ -341,24 +345,25 @@ function drawDetail(grid, y, width, agent, now) {
     `up ${formatDuration(agentRuntimeMs(agent, now))}`,
   ].filter(Boolean).join('  ·  ');
   drawText(grid, 2, y + 1, truncate(line1, inner), 'white');
-  drawText(grid, 2, y + 2, truncate(`task: ${taskText(agent)}`, inner), 'white');
+  drawText(grid, 2, y + 2, truncate(`task: ${agent.currentTask || taskText(agent)}`, inner), 'white');
   if (agent.projectPath || agent.projectLabel) {
-    drawText(grid, 2, y + 3, truncate(`path: ${agent.projectLabel || agent.projectPath}`, inner), 'gray');
+    drawText(grid, 2, y + 3, truncate(`path: ${agent.projectPath || agent.projectLabel}`, inner), 'gray');
   }
   const spark = sparkline(agent.cpuHistory || [], { width: Math.min(40, inner - 12) });
   if (spark) {
     drawText(grid, 2, y + 4, `cpu: ${spark}`, 'green');
   }
-  drawText(grid, 2, y + 5, truncate(`cmd: ${agent.command || '-'}`, inner), 'gray');
+  const confidence = Number.isFinite(agent.metadataConfidence) ? ` · match ${Math.round(agent.metadataConfidence * 100)}%` : '';
+  drawText(grid, 2, y + 5, truncate(`source: ${agent.metadataSource || agent.source || 'process'}${confidence} · status inferred`, inner), 'gray');
 }
 
 function drawFooter(grid, y, width, sortKey, filter, count) {
   fillRow(grid, y, ' ', 'gray');
-  const keys = 'q quit  ↑↓ select  s sort  / filter  k signal  c cd-hint  o office  r rescan';
-  drawText(grid, 0, y, keys, 'gray', undefined, false, width);
+  const keys = 'q quit  ↑↓ select  s sort  / filter  k signal  e activity  o office  h help';
   const right = filter
     ? `sort:${sortKey}  filter:"${filter}"  (${count})`
     : `sort:${sortKey}  (${count})`;
+  drawText(grid, 0, y, truncate(keys, Math.max(0, width - right.length - 2)), 'gray');
   drawText(grid, Math.max(0, width - right.length - 1), y, right, 'white');
 }
 
@@ -375,9 +380,9 @@ function cell(ch, color, bg, bold = false) {
 }
 
 function drawAligned(grid, col, y, text, color, bg, bold = false) {
-  const value = String(text == null ? '' : text);
+  const value = cleanText(text);
   const fitted = truncate(value, col.w);
-  const startX = col.align === 'right' ? col.x + (col.w - fitted.length) : col.x;
+  const startX = col.align === 'right' ? col.x + (col.w - textWidth(fitted)) : col.x;
   drawText(grid, startX, y, fitted, color, bg, bold, col.x + col.w);
 }
 
@@ -387,16 +392,19 @@ function drawText(grid, x, y, text, color, bg, bold = false, maxX) {
   }
   const row = grid[y];
   const limit = Number.isFinite(maxX) ? Math.min(row.length, maxX) : row.length;
-  const value = String(text == null ? '' : text);
+  const value = cleanText(text);
   let col = x;
-  for (let index = 0; index < value.length; index += 1) {
-    col = x + index;
-    if (col < 0 || col >= limit) {
-      continue;
+  for (const ch of value) {
+    const size = charWidth(ch);
+    if (col + size > limit) break;
+    if (size === 0) { if (col > 0 && row[col - 1]) row[col - 1].ch += ch; continue; }
+    if (col >= 0) {
+      row[col] = cell(ch, color, bg, bold);
+      if (size === 2) row[col + 1] = cell('', color, bg, bold);
     }
-    row[col] = cell(value[index], color, bg, bold);
+    col += size;
   }
-  return col + 1;
+  return col;
 }
 
 function fillRow(grid, y, ch, color, bg) {

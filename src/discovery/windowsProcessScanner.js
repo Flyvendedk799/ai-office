@@ -38,9 +38,9 @@ const ENCODED_SCRIPT = Buffer.from(PS_SCRIPT, 'utf16le').toString('base64');
 // between scans rather than the process lifetime.
 const cpuSamples = new Map();
 
-async function scanProcessesWindows({ logger } = {}) {
+async function scanProcessesWindows({ logger, run = execFileAsync } = {}) {
   try {
-    const { stdout } = await execFileAsync('powershell.exe', [
+    const { stdout } = await run('powershell.exe', [
       '-NoProfile',
       '-NonInteractive',
       '-ExecutionPolicy', 'Bypass',
@@ -51,11 +51,12 @@ async function scanProcessesWindows({ logger } = {}) {
       windowsHide: true,
     });
     const processes = parseWindowsProcesses(stdout, Date.now());
+    if (!processes.length) throw new Error('No process rows returned by Windows');
     logger?.debug('process scan complete', { count: processes.length, platform: 'win32' });
     return processes;
   } catch (error) {
     logger?.warn('process scan failed', { error: error.message, platform: 'win32' });
-    return [];
+    throw new Error(`Process scan failed: ${error.message}`);
   }
 }
 

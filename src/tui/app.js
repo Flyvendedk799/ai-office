@@ -1,449 +1,216 @@
 const blessed = require('blessed');
-const { AgentStore } = require('../state/store');
 const { HistoryRecorder } = require('../state/history');
 const { formatDuration } = require('../util/time');
+const { cleanText } = require('../util/text');
 const { renderHelp } = require('./help');
-const { renderOffice } = require('./office');
-const {
-  SORT_KEYS,
-  filterAgents,
-  renderDashboard,
-  sortAgents,
-} = require('./dashboard');
+const { renderOffice, createOfficeScene } = require('./office');
+const { SORT_KEYS, renderDashboard, filterAgents } = require('./dashboard');
+const { Workspace, scanLabel } = require('./workspace');
+const { renderActivity } = require('./activity');
+const { AnimationClock } = require('./motion');
 
-async function startTui({ config, discovery, logger, options }) {
-  const store = new AgentStore({ stoppedGraceMs: config.stoppedGraceMs });
-  const history = new HistoryRecorder({
-    filePath: config.historyPath,
-    enabled: config.enableHistory !== false && !options.demo,
-    logger,
-  });
-
-  const screen = blessed.screen({
-    smartCSR: true,
-    fullUnicode: true,
-    title: 'ai-office',
-  });
-
-  const view = blessed.box({ tags: true, scrollable: false });
-
-  const help = blessed.box({
-    tags: true,
-    hidden: true,
-    top: 'center',
-    left: 'center',
-    width: '78%',
-    height: 18,
-    content: renderHelp(),
-    border: { type: 'line' },
-    style: { border: { fg: 'yellow' }, bg: 'black' },
-  });
-
-  const prompt = blessed.box({
-    tags: true,
-    hidden: true,
-    border: { type: 'line' },
-    style: { border: { fg: 'cyan' }, bg: 'black' },
-  });
-
+async function startTui({ config, discovery, logger, options = {} }) {
+  const history = new HistoryRecorder({ filePath: config.historyPath, enabled: config.enableHistory !== false && !options.demo, logger });
+  const workspace = new Workspace({ config, discovery, history, logger });
+  workspace.filter = String(options.filter || '');
+  const { store } = workspace;
+  const configuredFps = Math.max(5, Math.min(60, config.animationFps || 30));
+  const clock = new AnimationClock();
+  const scene = createOfficeScene();
+  const screen = blessed.screen({ smartCSR: true, fullUnicode: true, title: 'ai-office' });
+  const view = blessed.box({ tags: true });
+  const healthBar = blessed.box({ tags: false, height: 1, style: { fg: 'gray' } });
+  const overlay = blessed.box({ tags: false, hidden: true, border: { type: 'line' }, style: { border: { fg: 'cyan' }, bg: 'black' } });
   screen.append(view);
-  screen.append(help);
-  screen.append(prompt);
+  screen.append(healthBar);
+  screen.append(overlay);
   screen.program.hideCursor();
 
-  let viewMode = options.dashboard ? 'dashboard' : (config.defaultView || 'office');
-  let paused = false;
-  let pausedAt = Date.now();
-  let closed = false;
-  let scanInFlight = false;
-  let lastScanLabel = 'never';
-  let sortKey = 'cpu';
-  let filter = String(options.filter || '');
-  let inputMode = null; // null | 'filter' | 'signal'
-  let signalTargetId;
+  let mode = options.dashboard ? 'dashboard' : config.defaultView;
+  let reducedMotion = config.reducedMotion;
+  let input = null;
+  let previousFilter = '';
+  let showHelp = false;
+  let signalTarget;
   let message = '';
   let messageUntil = 0;
+  let activityOffset = 0;
   let animationTimer;
   let scanTimer;
-  let lastUserSelectionAt = 0;
-  let nextAutoFocusAt = Date.now() + 6000;
+  let lastFrame = '';
   const idleAlerted = new Set();
+  let resolveDone;
+  const done = new Promise((resolve) => { resolveDone = resolve; });
 
-  function toast(text, ms = 2800) {
-    message = text;
-    messageUntil = Date.now() + ms;
+  function toast(text, duration = 3000) {
+    message = cleanText(text);
+    messageUntil = Date.now() + duration;
   }
 
   function bell() {
-    try {
-      if (screen.program && typeof screen.program.bell === 'function') {
-        screen.program.bell();
-      } else {
-        process.stdout.write('\x07');
-      }
-    } catch {
-      // Never let an alert break the UI.
-    }
-  }
-
-  function dimensions() {
-    return {
-      width: numericSize(screen.width, 100),
-      height: numericSize(screen.height, 32),
-    };
-  }
-
-  function currentOrder() {
-    const all = store.list();
-    if (viewMode === 'dashboard') {
-      return sortAgents(filterAgents(all, filter), sortKey, Date.now());
-    }
-    return filter ? filterAgents(all, filter) : all;
-  }
-
-  function layout() {
-    const { width, height } = dimensions();
-    view.top = 0;
-    view.left = 0;
-    view.width = width;
-    view.height = height;
+    try { screen.program.bell(); } catch { /* Alerts must not break the UI. */ }
   }
 
   function render() {
+    if (workspace.closed) return;
     const now = Date.now();
-    const visualNow = paused ? pausedAt : now;
+    const width = Math.max(1, Number(screen.width) || 80);
+    const height = Math.max(1, Number(screen.height) || 24);
+    const bodyHeight = Math.max(1, height - 1);
     store.expire(now);
-    layout();
-    const { width, height } = dimensions();
-
-    const order = currentOrder();
-    if (order.length && !order.some((agent) => agent.id === store.selectedId)) {
-      store.select(order[0].id);
+    workspace.ensureSelection(mode);
+    const order = workspace.order(mode);
+    if (mode === 'activity') {
+      const count = workspace.activity.filter((event) => !workspace.filter || filterAgents([event], workspace.filter).length).length;
+      activityOffset = Math.min(activityOffset, Math.max(0, count - Math.max(0, bodyHeight - 3)));
     }
-    maybeAutoFocus(now, order);
+    view.width = width;
+    view.height = bodyHeight;
+    healthBar.top = height - 1;
+    healthBar.width = width;
+    healthBar.style.fg = workspace.health.error ? 'red' : 'gray';
+    healthBar.setContent(cleanText(`${options.demo ? 'DEMO · ' : ''}${scanLabel(workspace.health, now)}${clock.paused ? ' · animation paused' : ''}${reducedMotion ? ' · reduced motion' : ''}`).slice(0, width));
+    const frame = mode === 'activity'
+      ? renderActivity({ events: workspace.activity, width, height: bodyHeight, filter: workspace.filter, offset: activityOffset })
+      : mode === 'dashboard'
+        ? renderDashboard({ agents: order, width, height: bodyHeight, now, selectedId: store.selectedId, sortKey: workspace.sortKey, filter: workspace.filter, totals: store.totals(), cpuHistory: store.cpuHistory })
+        : renderOffice({ agents: order, allAgents: store.list(), width, height: bodyHeight, now: clock.time(now), realNow: now, scene, selectedId: store.selectedId, paused: clock.paused, reducedMotion, filter: workspace.filter });
+    if (frame !== lastFrame) { view.setContent(frame); lastFrame = frame; }
 
-    if (viewMode === 'dashboard') {
-      view.setContent(renderDashboard({
-        agents: order,
-        width,
-        height,
-        now,
-        selectedId: store.selectedId,
-        sortKey,
-        filter,
-        totals: store.totals(),
-        cpuHistory: store.cpuHistory,
-        paused,
-      }));
-    } else {
-      view.setContent(renderOffice({
-        agents: order,
-        width,
-        height,
-        now: visualNow,
-        selectedId: store.selectedId,
-        paused,
-        filter,
-      }));
+    overlay.hidden = true;
+    let content;
+    if (showHelp) content = renderHelp().replace(/\{[^}]*\}/g, '');
+    else if (input === 'filter') content = `Filter: ${workspace.filter}_\nEnter apply · Esc cancel`;
+    else if (input === 'signal') content = `Signal ${signalTarget.toolName} · ${signalTarget.title || signalTarget.sessionName || signalTarget.pid}\nPIDs: ${signalTarget.pids.join(', ')}\nt TERM · i INT · 9 KILL · Esc cancel`;
+    else if (message && now < messageUntil) content = message;
+    if (content) {
+      overlay.width = Math.max(1, Math.min(width, showHelp ? 78 : 70));
+      overlay.height = Math.max(1, Math.min(bodyHeight, content.split('\n').length + 2));
+      overlay.left = Math.max(0, Math.floor((width - overlay.width) / 2));
+      overlay.top = Math.max(0, showHelp || input === 'signal' ? Math.floor((bodyHeight - overlay.height) / 2) : bodyHeight - overlay.height - 1);
+      overlay.style.border.fg = input === 'signal' ? 'red' : 'cyan';
+      overlay.setContent(String(content).split('\n').map(cleanText).join('\n'));
+      overlay.hidden = false;
     }
-
-    updateOverlays(now);
     screen.render();
   }
 
-  function updateOverlays(now) {
-    const { width, height } = dimensions();
-
-    if (!help.hidden) {
-      prompt.hidden = true;
-      return;
-    }
-
-    if (inputMode === 'signal') {
-      const target = store.get(signalTargetId);
-      const name = target ? `${target.toolName} · ${target.sessionName || target.pid}` : 'agent';
-      prompt.width = Math.min(width - 4, 64);
-      prompt.height = 5;
-      prompt.top = Math.max(1, Math.floor(height / 2) - 2);
-      prompt.left = 'center';
-      prompt.style.border.fg = 'red';
-      prompt.setContent([
-        `{bold}Signal ${escapeTag(name)}{/bold}`,
-        '',
-        '{red-fg}t{/} SIGTERM   {yellow-fg}i{/} SIGINT   {red-fg}9{/} SIGKILL   esc cancel',
-      ].join('\n'));
-      prompt.hidden = false;
-      return;
-    }
-
-    if (inputMode === 'filter') {
-      prompt.width = Math.min(width - 4, 60);
-      prompt.height = 3;
-      prompt.top = height - 4;
-      prompt.left = 'center';
-      prompt.style.border.fg = 'cyan';
-      prompt.setContent(`filter: ${escapeTag(filter)}{cyan-fg}▏{/}   (enter apply · esc clear)`);
-      prompt.hidden = false;
-      return;
-    }
-
-    if (message && now < messageUntil) {
-      prompt.width = Math.min(width - 4, Math.max(20, message.length + 4));
-      prompt.height = 3;
-      prompt.top = height - 4;
-      prompt.left = 'center';
-      prompt.style.border.fg = 'cyan';
-      prompt.setContent(`{center}${escapeTag(message)}{/center}`);
-      prompt.hidden = false;
-      return;
-    }
-
-    prompt.hidden = true;
-  }
-
-  function maybeAutoFocus(now, order) {
-    if (
-      viewMode !== 'office'
-      || inputMode
-      || filter
-      || order.length < 2
-      || now - lastUserSelectionAt < 6000
-      || now < nextAutoFocusAt
-    ) {
-      return;
-    }
-    store.selectNext(1, order);
-    nextAutoFocusAt = now + 4000;
-  }
-
-  function handleEvents(events) {
-    if (!events.length) {
-      return;
-    }
-    history.record(events);
-    const finished = events.filter((event) => event.type === 'stopped');
-    for (const event of finished) {
-      const name = event.title || event.sessionName || event.toolName;
-      toast(`✗ ${event.toolName}: ${truncateMessage(name)} finished (${formatDuration(event.runtimeMs || 0)})`);
-      if (config.bellOnFinish) {
-        bell();
-      }
-    }
-  }
-
-  function checkIdleAlerts(now) {
-    if (!config.idleAlertMs || config.idleAlertMs <= 0) {
-      return;
+  async function rescan() {
+    const pending = workspace.scan();
+    render();
+    const events = await pending;
+    if (workspace.closed) return;
+    for (const event of events.filter((event) => event.type === 'stopped')) {
+      toast(`${event.toolName}: ${event.title || event.sessionName || event.pid} exited (${formatDuration(event.runtimeMs)})`);
+      if (config.bellOnFinish) bell();
     }
     for (const agent of store.list()) {
-      if (agent.status === 'idle' && now - (agent.statusChangedAt || now) >= config.idleAlertMs) {
+      if (config.idleAlertMs > 0 && agent.status === 'idle' && Date.now() - agent.statusChangedAt >= config.idleAlertMs) {
         if (!idleAlerted.has(agent.id)) {
           idleAlerted.add(agent.id);
-          toast(`⏸ ${agent.toolName}: ${truncateMessage(agent.sessionName || agent.title || agent.pid)} idle ${formatDuration(now - agent.statusChangedAt)}`);
-          if (config.bellOnFinish) {
-            bell();
-          }
+          toast(`${agent.toolName}: idle ${formatDuration(Date.now() - agent.statusChangedAt)}`);
+          if (config.bellOnFinish) bell();
         }
-      } else if (agent.status !== 'idle') {
-        idleAlerted.delete(agent.id);
-      }
+      } else idleAlerted.delete(agent.id);
     }
-  }
-
-  async function rescan(reason = 'timer') {
-    if (scanInFlight || closed) {
-      return;
-    }
-    scanInFlight = true;
-    try {
-      const agents = await discovery.discover();
-      store.update(agents);
-      handleEvents(store.drainEvents());
-      checkIdleAlerts(Date.now());
-      lastScanLabel = new Date().toLocaleTimeString();
-      logger.debug('rescan applied', { reason, agents: agents.length });
-    } catch (error) {
-      logger.error('rescan failed', { reason, error: error.message });
-      lastScanLabel = 'error';
-    } finally {
-      scanInFlight = false;
-      render();
-    }
-  }
-
-  function moveSelection(delta) {
-    store.selectNext(delta, currentOrder());
-    lastUserSelectionAt = Date.now();
-    nextAutoFocusAt = lastUserSelectionAt + 6000;
+    for (const id of idleAlerted) if (!store.get(id)) idleAlerted.delete(id);
     render();
-  }
-
-  function toggleView() {
-    viewMode = viewMode === 'office' ? 'dashboard' : 'office';
-    toast(viewMode === 'dashboard' ? 'dashboard view' : 'office view', 1400);
-    render();
-  }
-
-  function cycleSort() {
-    const index = SORT_KEYS.indexOf(sortKey);
-    sortKey = SORT_KEYS[(index + 1) % SORT_KEYS.length];
-    toast(`sort: ${sortKey}`, 1400);
-    render();
-  }
-
-  function beginSignal() {
-    const target = store.selected();
-    if (!target) {
-      toast('No agent selected');
-      render();
-      return;
-    }
-    signalTargetId = target.id;
-    inputMode = 'signal';
-    render();
-  }
-
-  function applySignal(signal) {
-    const target = store.get(signalTargetId);
-    inputMode = null;
-    signalTargetId = undefined;
-    if (!target) {
-      render();
-      return;
-    }
-    const pids = (target.pids && target.pids.length ? target.pids : [target.pid]).filter(Boolean);
-    if (options.demo) {
-      toast(`(demo) would send ${signal} to ${target.toolName} [${pids.join(', ')}]`);
-      render();
-      return;
-    }
-    let ok = 0;
-    let fail = 0;
-    for (const pid of pids) {
-      try {
-        process.kill(pid, signal);
-        ok += 1;
-      } catch (error) {
-        fail += 1;
-        logger.warn('signal failed', { pid, signal, error: error.message });
-      }
-    }
-    toast(`${signal} → ${target.toolName} (${ok} pid${ok === 1 ? '' : 's'}${fail ? `, ${fail} failed` : ''})`);
-    render();
-    rescan('signal');
-  }
-
-  function showCdHint() {
-    const target = store.selected();
-    const path = target?.projectPath || target?.projectLabel;
-    toast(path ? `cd ${path}` : 'No project path for this agent', 4000);
-    render();
-  }
-
-  function handleFilterKey(ch, key) {
-    const name = key && key.name;
-    if (name === 'return' || name === 'enter') {
-      inputMode = null;
-    } else if (name === 'escape') {
-      filter = '';
-      inputMode = null;
-    } else if (name === 'backspace') {
-      filter = filter.slice(0, -1);
-    } else if (ch && ch.length === 1 && ch >= ' ' && !(key && key.ctrl)) {
-      filter += ch;
-    }
-    render();
-  }
-
-  function handleSignalKey(ch, key) {
-    const name = key && key.name;
-    if (name === 'escape') {
-      inputMode = null;
-      signalTargetId = undefined;
-      toast('signal cancelled', 1200);
-      render();
-      return;
-    }
-    if (ch === 't') return applySignal('SIGTERM');
-    if (ch === 'i') return applySignal('SIGINT');
-    if (ch === '9' || ch === 'k') return applySignal('SIGKILL');
   }
 
   function shutdown() {
-    if (closed) {
-      return;
-    }
-    closed = true;
+    if (workspace.closed) return;
+    workspace.closed = true;
     clearInterval(animationTimer);
     clearInterval(scanTimer);
+    process.removeListener('SIGTERM', shutdown);
     screen.program.showCursor();
     screen.destroy();
+    resolveDone();
   }
 
-  // The global keypress listener is registered BEFORE the named key bindings so
-  // that the keystroke that opens an input mode is not also captured as input.
-  screen.on('keypress', (ch, key) => {
-    if (inputMode === 'filter') {
-      handleFilterKey(ch, key);
-    } else if (inputMode === 'signal') {
-      handleSignalKey(ch, key);
-    }
-  });
+  function beginSignal() {
+    const target = workspace.selected(mode);
+    if (mode === 'activity' || !target || target.status === 'stopped') return toast('Select a live agent first');
+    signalTarget = { ...target, pids: (target.pids?.length ? target.pids : [target.pid]).slice() };
+    input = 'signal';
+  }
 
-  const gated = (handler) => () => {
-    if (inputMode) {
-      return;
+  function applySignal(signal) {
+    input = null;
+    const target = store.get(signalTarget.id);
+    const startDrift = Math.abs((target?.startedAt || 0) - (signalTarget.startedAt || 0));
+    if (!target || target.status === 'stopped' || target.pid !== signalTarget.pid || startDrift > 2000) return toast('Agent changed or exited; signal cancelled');
+    const pids = [...new Set(signalTarget.pids)].filter((pid) => Number.isInteger(pid) && pid > 0 && pid !== process.pid);
+    if (options.demo) return toast(`Demo: would send ${signal} to ${pids.join(', ')}`);
+    let sent = 0;
+    for (const pid of pids) {
+      try { process.kill(pid, signal); sent++; }
+      catch (error) { logger.warn('signal failed', { pid, signal, error: error.message }); }
     }
-    handler();
-  };
+    toast(`${signal}: ${sent}/${pids.length} processes signalled`);
+    void rescan();
+  }
 
-  screen.key('C-c', shutdown);
-  screen.key('q', gated(shutdown));
-  screen.key('r', gated(() => rescan('manual')));
-  screen.key(['tab', 'right', 'down'], gated(() => moveSelection(1)));
-  screen.key(['left', 'up'], gated(() => moveSelection(-1)));
-  screen.key('h', gated(() => { help.hidden = !help.hidden; render(); }));
-  screen.key('p', gated(() => { paused = !paused; pausedAt = Date.now(); render(); }));
-  screen.key(['d', 'o'], gated(toggleView));
-  screen.key('s', gated(cycleSort));
-  screen.key('k', gated(beginSignal));
-  screen.key('c', gated(showCdHint));
-  screen.key('/', gated(() => { inputMode = 'filter'; render(); }));
-  screen.key('escape', gated(() => {
-    if (!help.hidden) {
-      help.hidden = true;
-    } else if (filter) {
-      filter = '';
+  // A single dispatcher keeps prompt keys from also triggering shortcuts.
+  screen.on('keypress', (ch, key = {}) => {
+    if (key.ctrl && key.name === 'c') return shutdown();
+    if (input === 'filter') {
+      if (['return', 'enter'].includes(key.name)) input = null;
+      else if (key.name === 'escape') { workspace.filter = previousFilter; input = null; }
+      else if (key.name === 'backspace') workspace.filter = Array.from(workspace.filter).slice(0, -1).join('');
+      else if (ch && !key.ctrl && !key.meta && ch >= ' ') workspace.filter += ch;
+      activityOffset = 0;
+    } else if (input === 'signal') {
+      if (key.name === 'escape') input = null;
+      else if (ch === 't') applySignal('SIGTERM');
+      else if (ch === 'i') applySignal('SIGINT');
+      else if (ch === '9') applySignal('SIGKILL');
+    } else if (showHelp) {
+      if (['escape', 'h', 'q'].includes(key.name)) showHelp = false;
+    } else {
+      switch (key.name || ch) {
+        case 'q': return shutdown();
+        case 'r': void rescan(); break;
+        case 'd': mode = 'dashboard'; break;
+        case 'o': mode = 'office'; break;
+        case 'e': mode = 'activity'; activityOffset = 0; break;
+        case 's': workspace.sortKey = SORT_KEYS[(SORT_KEYS.indexOf(workspace.sortKey) + 1) % SORT_KEYS.length]; break;
+        case 'tab': case 'right': case 'down':
+          if (mode === 'activity') activityOffset++; else workspace.move(1, mode);
+          break;
+        case 'left': case 'up':
+          if (mode === 'activity') activityOffset = Math.max(0, activityOffset - 1); else workspace.move(-1, mode);
+          break;
+        case 'p': clock.toggle(); break;
+        case 'm': reducedMotion = !reducedMotion; break;
+        case 'h': showHelp = true; break;
+        case 'k': beginSignal(); break;
+        case 'c': {
+          const path = workspace.selected(mode)?.projectPath;
+          toast(path ? cdCommand(path) : 'No project path for this agent', 6000);
+          break;
+        }
+        case '/': previousFilter = workspace.filter; input = 'filter'; break;
+        case 'escape': workspace.filter = ''; break;
+      }
     }
     render();
-  }));
-  screen.on('resize', render);
-
-  await rescan('initial');
-  animationTimer = setInterval(render, 100);
-  scanTimer = setInterval(() => rescan('timer'), Math.max(250, config.scanIntervalMs));
-
-  return new Promise((resolve) => {
-    screen.on('destroy', resolve);
   });
+  screen.on('resize', () => { lastFrame = ''; render(); });
+  screen.on('destroy', shutdown);
+  process.once('SIGTERM', shutdown);
+  try {
+    await rescan();
+    if (!workspace.closed) {
+      animationTimer = setInterval(render, Math.round(1000 / configuredFps));
+      scanTimer = setInterval(() => void rescan(), Math.max(250, config.scanIntervalMs));
+    }
+    await done;
+  } finally { shutdown(); }
 }
 
-function numericSize(value, fallback) {
-  if (typeof value === 'number') {
-    return value;
-  }
-  return Number(value) || fallback || 80;
+function cdCommand(path, platform = process.platform) {
+  return platform === 'win32' ? `Set-Location -LiteralPath '${path.replace(/'/g, "''")}'` : `cd -- '${path.replace(/'/g, "'\\''")}'`;
 }
 
-function truncateMessage(value, max = 28) {
-  const text = String(value || '');
-  return text.length > max ? `${text.slice(0, max - 1)}…` : text;
-}
-
-function escapeTag(value) {
-  return String(value == null ? '' : value).replace(/[{}]/g, '');
-}
-
-module.exports = {
-  startTui,
-};
+module.exports = { startTui, cdCommand };

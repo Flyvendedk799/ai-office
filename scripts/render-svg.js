@@ -7,12 +7,14 @@
 
 const fs = require('fs');
 const path = require('path');
-const { renderOffice } = require('../src/tui/office');
+const { renderOffice, createOfficeScene } = require('../src/tui/office');
 const { renderDashboard } = require('../src/tui/dashboard');
 const { DemoDiscovery } = require('../src/demo');
+const { AgentStore } = require('../src/state/store');
+const { textWidth } = require('../src/util/text');
 
-const COLS = 84;
-const ROWS = 26;
+const COLS = 130;
+const ROWS = 34;
 const CHAR_W = 8.42;
 const ROW_H = 17;
 const FONT_SIZE = 14;
@@ -42,11 +44,12 @@ function esc(text) {
 function parseLine(line) {
   const runs = [];
   let color;
+  let bg;
   let bold = false;
   let buffer = '';
   const flush = () => {
     if (buffer) {
-      runs.push({ text: buffer, color, bold });
+      runs.push({ text: buffer, color, bg, bold });
       buffer = '';
     }
   };
@@ -60,6 +63,7 @@ function parseLine(line) {
     if (tag === '/') {
       flush();
       color = undefined;
+      bg = undefined;
       bold = false;
     } else if (tag === 'bold') {
       flush();
@@ -67,6 +71,9 @@ function parseLine(line) {
     } else if (tag.endsWith('-fg')) {
       flush();
       color = tag.slice(0, -3);
+    } else if (tag.endsWith('-bg')) {
+      flush();
+      bg = tag.slice(0, -3);
     }
   }
   buffer += line.slice(last);
@@ -76,14 +83,20 @@ function parseLine(line) {
 
 function rowSvg(line) {
   const runs = parseLine(line);
+  let x = 0;
+  const backgrounds = runs.map((run) => {
+    const rect = run.bg ? `<rect x="${x.toFixed(1)}" y="-${FONT_SIZE}" width="${(run.text.length * CHAR_W).toFixed(1)}" height="${ROW_H}" fill="${run.bg === 'blue' ? '#1c354b' : PALETTE[run.bg] || '#21262d'}"/>` : '';
+    x += textWidth(run.text) * CHAR_W;
+    return rect;
+  }).join('');
   const spans = runs.map((run) => {
     const fill = PALETTE[run.color] || PALETTE.default;
     const weight = run.bold ? ' font-weight="600"' : '';
     return `<tspan fill="${fill}"${weight}>${esc(run.text)}</tspan>`;
   }).join('');
   const plain = line.replace(/\{[^}]*\}/g, '');
-  const width = (plain.length * CHAR_W).toFixed(1);
-  return `<text xml:space="preserve" textLength="${width}" lengthAdjust="spacingAndGlyphs">${spans}</text>`;
+  const width = (textWidth(plain) * CHAR_W).toFixed(1);
+  return `<g>${backgrounds}<text xml:space="preserve" textLength="${width}" lengthAdjust="spacingAndGlyphs">${spans}</text></g>`;
 }
 
 function buildSvg(frames, { durationS }) {
@@ -103,12 +116,12 @@ function buildSvg(frames, { durationS }) {
       return `<use href="#${defs.get(svg)}" x="${PAD}" y="${y}"/>`;
     }).join('');
     const delay = frames.length > 1 ? ` style="animation-delay:${(frameIndex * durationS / frames.length).toFixed(2)}s"` : '';
-    const cls = frames.length > 1 ? ' class="fr"' : '';
+    const cls = frames.length > 1 ? ` class="fr${frameIndex === 0 ? ' frame-first' : ''}"` : '';
     return `<g${cls}${delay}>${uses}</g>`;
   });
 
   const defEntries = [...defs.entries()]
-    .map(([svg, id]) => svg.replace('<text ', `<text id="${id}" `))
+    .map(([svg, id]) => svg.replace('<g>', `<g id="${id}">`))
     .join('\n    ');
 
   const animationCss = frames.length > 1 ? `
@@ -119,8 +132,11 @@ function buildSvg(frames, { durationS }) {
     }` : '';
 
   return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${width} ${height}" width="${width}" font-family="ui-monospace, 'Cascadia Code', 'JetBrains Mono', Menlo, Consolas, monospace" font-size="${FONT_SIZE}">
+  <title>ai-office · your agents at work</title>
+  <desc>Animated local agent office with workstations, a lounge, a session inspector and live metrics.</desc>
   <style>
     text { white-space: pre; }${animationCss}
+    @media (prefers-reduced-motion: reduce) { .fr { animation: none; visibility: hidden; } .frame-first { visibility: visible; } }
   </style>
   <rect width="${width}" height="${height}" rx="10" fill="#0d1117" stroke="#30363d"/>
   <circle cx="22" cy="19" r="5.5" fill="#ff5f57"/>
@@ -142,17 +158,25 @@ async function main() {
   demo.startedAt = baseNow;
 
   const frames = [];
-  const frameCount = 36;
-  const stepMs = 400;
+  const frameCount = 360;
+  const scene = createOfficeScene();
+  const store = new AgentStore({ startingMs: 0 });
+  const stepMs = 50;
   for (let index = 0; index < frameCount; index += 1) {
     const now = baseNow + 500 + index * stepMs;
-    const agents = await demo.discover(now);
+    if (index % 40 === 0) {
+      store.update(await demo.discover(now), now);
+      store.drainEvents();
+    }
+    store.expire(now);
+    const agents = store.list();
     frames.push(renderOffice({
       agents,
       width: COLS,
       height: ROWS,
       now,
       selectedId: 'demo-claude-terminal',
+      scene,
     }));
   }
   const outDir = path.join(__dirname, '..', 'assets');

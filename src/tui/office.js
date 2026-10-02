@@ -1,105 +1,122 @@
 const { formatMemoryKb, formatPercent } = require('../util/format');
 const { UI, inferVendor, vendorColor } = require('./theme');
-
-// ── The office ──────────────────────────────────────────────────────────────
-// Fixed-art floor plan. Legend:
-//   ║ ═ ╔ ╗ ╚ ╝ ╡ ╞ ┌ ┐ └ ┘ ─ │   walls (drawn as-is)
-//   w  window (animated sky)        k  wall clock (live local time)
-//   ▬  desk                         n  seat
-//   ▣  coffee machine               ~  couch
-//   ❀  plant                        .  floor
-//   +  entrance door (walkable)
-const MAP = [
-  '╔═══╡ww╞═══════╡ww╞═══════╡ww╞═══════╡ww╞═══════╡ww╞═════╡kkkkk╞═════╗',
-  '║....................................................................║',
-  '║.❀...▬▬▬▬▬▬▬▬▬▬.....▬▬▬▬▬▬▬▬▬▬.....▬▬▬▬▬▬▬▬▬▬.....▬▬▬▬▬▬▬▬▬▬.....❀..║',
-  '║....................................................................║',
-  '║.......n....n.........n....n.........n....n.........n....n..........║',
-  '║....................................................................║',
-  '║.❀...▬▬▬▬▬▬▬▬▬▬.....▬▬▬▬▬▬▬▬▬▬.....▬▬▬▬▬▬▬▬▬▬.....▬▬▬▬▬▬▬▬▬▬........║',
-  '║....................................................................║',
-  '║.......n....n.........n....n.........n....n.........n....n..........║',
-  '║....................................................................║',
-  '║.❀...▬▬▬▬▬▬▬▬▬▬.....▬▬▬▬▬▬▬▬▬▬..........┌────────────────────────┐..║',
-  '║........................................│........................│..║',
-  '+.......n....n.........n....n............│...▣......~~~~......❀...│..║',
-  '+.................................................................│..║',
-  '║........................................└────────────────────────┘..║',
-  '║....................................................................║',
-  '╚════════════════════════════════════════════════════════════════════╝',
-].map((line) => Array.from(line));
-
-const MAP_W = MAP[0].length;
-const MAP_H = MAP.length;
-for (const row of MAP) {
-  if (row.length !== MAP_W) {
-    throw new Error(`office map is ragged: expected every row to be ${MAP_W} cells`);
-  }
-}
-
-const STEP_MS = 120;
-const ENTRANCE = { x: 1, y: 13 };
-
-const SEATS = [];
-const WINDOWS = [];
-let CLOCK_AT = null;
-for (let y = 0; y < MAP_H; y += 1) {
-  for (let x = 0; x < MAP_W; x += 1) {
-    const ch = MAP[y][x];
-    if (ch === 'n') {
-      SEATS.push({ x, y });
-    }
-    if (ch === 'w' && MAP[y][x - 1] !== 'w') {
-      WINDOWS.push({ x, y });
-    }
-    if (ch === 'k' && !CLOCK_AT) {
-      CLOCK_AT = { x, y };
-    }
-  }
-}
+const { MAP, MAP_W, MAP_H, SEATS, WINDOWS, MONITORS } = require('./floor');
+const { OfficeScene } = require('./motion');
+const { renderDashboard } = require('./dashboard');
+const { cleanText, truncate, charWidth, textWidth, padRight } = require('../util/text');
+const { formatDuration } = require('../util/time');
+const STEP_MS = 90;
+const ENTRANCE = { x: 1, y: 19 };
+const CLOCK_AT = { x: 79, y: 0 };
 
 const COFFEE = findFirst('▣');
-const COFFEE_SPOTS = [
-  { x: COFFEE.x - 1, y: COFFEE.y },
-  { x: COFFEE.x + 1, y: COFFEE.y },
-  { x: COFFEE.x + 2, y: COFFEE.y },
-];
+const COFFEE_SPOTS = [50, 51, 52, 54, 55, 56, 57, 58, 59, 60, 61, 62].map((x) => ({ x, y: COFFEE.y }));
 const COUCH = findFirst('~');
-const COUCH_SPOTS = [
-  { x: COUCH.x, y: COUCH.y + 1 },
-  { x: COUCH.x + 2, y: COUCH.y + 1 },
-  { x: COUCH.x + 3, y: COUCH.y + 1 },
-];
+const COUCH_SPOTS = [50, 53, 56, 59, 62, 65, 68, 71, 74, 77, 80, 83].map((x) => ({ x, y: COUCH.y + 1 }));
 
-const BREAK_ROOM = { x: findFirst('┌').x, y: findFirst('┌').y, w: 26 };
+const BREAK_ROOM = { x: 47, y: 15, w: 39 };
 const ROOMBA_DOCK = { x: 3, y: MAP_H - 2 };
 // The roomba patrols a rectangular circuit around the open floor, forever.
 // If a future floor-plan edit blocks the circuit, it simply stays docked.
 const ROOMBA_CIRCUIT = buildRoombaCircuit();
 const ROUTE_CACHE = new Map();
 
-function renderOffice({ agents = [], width = 80, height = 24, now = Date.now(), selectedId, paused = false, filter = '' }) {
-  const screenWidth = Math.max(40, Math.floor(width || 80));
-  const screenHeight = Math.max(8, Math.floor(height || 24));
+function createOfficeScene() {
+  return new OfficeScene({ seats: SEATS, entrance: ENTRANCE, coffeeSpots: COFFEE_SPOTS, couchSpots: COUCH_SPOTS, route, initialState: visualState, stepMs: STEP_MS });
+}
+
+function renderOffice({ agents = [], allAgents = agents, width = 80, height = 24, now = Date.now(), realNow = now, selectedId, paused = false, reducedMotion = false, filter = '', scene } = {}) {
+  const screenWidth = Math.max(1, Math.floor(width || 80));
+  const screenHeight = Math.max(1, Math.floor(height || 24));
   const rows = makeGrid(screenWidth, screenHeight);
-  const sessions = agents.map((agent, index) => toSession(agent, index, now));
+  const sessions = agents.map((agent, index) => toSession(agent, index, realNow));
   const selectedIndex = Math.max(0, sessions.findIndex((session) => session.id === selectedId));
   const focused = sessions[selectedIndex] || sessions[0];
-  const visible = sessions.slice(0, SEATS.length);
-  const focusedVisibleIndex = Math.max(0, visible.findIndex((session) => session.id === focused?.id));
-  const officeAgents = visible.map((session, index) => toOfficeAgent(session, index, now));
-  const map = renderMap(officeAgents, focusedVisibleIndex, now);
-  const mapLeft = Math.max(0, Math.floor((screenWidth - MAP_W) / 2));
+  const floor = Math.floor((focused?.source.deskIndex ?? focused?.index ?? 0) / SEATS.length);
+  const visible = sessions.filter((session) => Math.floor((session.source.deskIndex ?? session.index) / SEATS.length) === floor);
+  const allSessions = allAgents.map((agent, index) => toSession(agent, index, realNow));
+  const actors = scene ? scene.sync(allSessions, now, realNow, reducedMotion) : allSessions.map((session) => {
+    const index = session.source.deskIndex ?? session.index;
+    const visual = toOfficeAgent(session, index, now);
+    if (reducedMotion) Object.assign(visual, session.status === 'idle' ? breakSpot(COUCH_SPOTS, index) : SEATS[index % SEATS.length], { state: session.status === 'idle' ? 'couch' : 'type' });
+    return visual;
+  });
+  const visibleIds = new Set(visible.map((session) => session.id));
+  const officeAgents = actors.filter((actor) => visibleIds.has(actor.id) && actor.state !== 'exit');
+  const focusedVisibleIndex = officeAgents.findIndex((session) => session.id === focused?.id);
+  const ambientNow = reducedMotion ? new Date(realNow).setMinutes(0, 0, 0) : now;
+  if (screenHeight < 16) return renderDashboard({ agents, width: screenWidth, height: screenHeight, now: realNow, selectedId, filter });
+  const fullScene = screenWidth >= MAP_W && screenHeight >= MAP_H + 5;
+  const sidebar = fullScene && screenWidth >= MAP_W + 38;
+  const mapLeft = sidebar ? 1 : Math.max(0, Math.floor((screenWidth - MAP_W) / 2));
 
   drawTitle(rows, sessions, paused, now, filter);
-  pasteMap(rows, map, mapLeft, 1);
-  if (sessions.length === 0) {
-    drawEmptyHint(rows, mapLeft, filter);
+  if (fullScene) {
+    pasteMap(rows, renderMap(officeAgents, focusedVisibleIndex, ambientNow, realNow), mapLeft, 1);
+    if (!sessions.length) drawEmptyHint(rows, mapLeft, filter);
+    if (sidebar) drawInspector(rows, MAP_W + 3, focused, realNow);
+  } else {
+    drawCompactOffice(rows, sessions, selectedIndex, ambientNow, reducedMotion, filter);
   }
-  drawSessionList(rows, sessions, selectedIndex, 1 + MAP_H, screenHeight - 2);
+  drawSessionList(rows, sessions, selectedIndex, fullScene ? 1 + MAP_H : 10, screenHeight - 2);
+  if (focused) drawTextCells(rows, 1, screenHeight - 2, `› ${focused.name} · ${focused.task}`, UI.fg, screenWidth - 2);
+  if (fullScene && Math.max(...allSessions.map((session) => session.source.deskIndex ?? session.index), 0) >= SEATS.length) {
+    drawTextCells(rows, mapLeft + 2, MAP_H, ` floor ${floor + 1} · select an agent to follow `, UI.accent, MAP_W - 4);
+  }
   drawStatus(rows, sessions, screenHeight - 1);
 
   return gridToBlessed(rows);
+}
+
+function drawCompactOffice(rows, sessions, selectedIndex, now, reducedMotion, filter) {
+  const width = rows[0].length;
+  const roomWidth = Math.min(width - 2, 72);
+  const left = Math.max(0, Math.floor((width - roomWidth) / 2));
+  if (roomWidth < 8) return;
+  drawTextCells(rows, left, 2, `╔${'═'.repeat(roomWidth - 2)}╗`, UI.wall);
+  drawTextCells(rows, left, 8, `╚${'═'.repeat(roomWidth - 2)}╝`, UI.wall);
+  for (let y = 3; y < 8; y++) { setCell(rows, left, y, '║', UI.wall); setCell(rows, left + roomWidth - 1, y, '║', UI.wall); }
+  const count = Math.max(1, Math.floor((roomWidth - 4) / 15));
+  const first = Math.floor(selectedIndex / count) * count;
+  for (let index = 0; index < count && first + index < sessions.length; index++) {
+    const session = sessions[first + index];
+    const x = left + 2 + index * 15;
+    drawTextCells(rows, x, 3, truncatePlain(session.name, 12), session.color, 12);
+    drawTextCells(rows, x + 2, 4, session.status === 'idle' ? '  ~ u  ' : '[ >_ ]', session.color, 8);
+    drawTextCells(rows, x, 5, '▬▬▬▬▬▬▬▬▬▬▬', UI.desk, 12);
+    setCell(rows, x + 5, 6, 'o', session.color, true);
+    setCell(rows, x + 5, 7, session.status === 'idle' ? '_' : reducedMotion ? 'T' : Math.floor(now / 180) % 2 ? 'Y' : 'T', session.color);
+    if (first + index === selectedIndex) setCell(rows, x, 6, '›', UI.accent);
+  }
+  if (!sessions.length) {
+    drawTextCells(rows, left + 2, 4, filter ? 'No agents match this filter.' : 'the office is empty · scanning for agents', UI.fg, roomWidth - 4);
+    drawTextCells(rows, left + 2, 6, 'try: ai-office --demo', UI.muted, roomWidth - 4);
+  }
+  drawTextCells(rows, 1, 9, 'compact studio · d metrics · enlarge for the full office', UI.muted, width - 2);
+}
+
+function drawInspector(rows, left, session, now) {
+  const width = rows[0].length - left - 2;
+  for (let y = 2; y < MAP_H; y++) setCell(rows, left - 2, y, '│', UI.frame);
+  drawTextCells(rows, left, 2, 'SESSION IN FOCUS', UI.accent, width);
+  if (!session) { drawTextCells(rows, left, 4, 'Waiting for your first agent.', UI.muted, width); return; }
+  const agent = session.source;
+  const lines = [session.title || session.name, `${agent.toolName} · ${session.status}`, '', 'CURRENT TASK', ...wrapText(session.task, width).slice(0, 3), '', 'PROJECT', ...wrapText(agent.projectPath || agent.projectLabel || 'Not identified', width).slice(0, 2), '', `CPU ${formatPercent(agent.cpu)} · MEM ${formatMemoryKb(agent.rssKb)}`, `PID ${agent.pid} · UP ${formatDuration(agent.status === 'stopped' ? agent.runtimeMs : now - (agent.startedAt ?? now))}`, '', `Source: ${agent.metadataSource || agent.source || 'process'}`, 'Status inferred from local activity', '', '↑↓ select · / filter', 'e activity · d dashboard'];
+  lines.forEach((line, index) => drawTextCells(rows, left, 4 + index, line, index === 0 ? session.color : UI.muted, width));
+}
+
+function wrapText(value, width) {
+  let text = cleanText(value);
+  const lines = [];
+  while (text) {
+    let part = truncate(text, Math.max(1, width), '');
+    if (!part) part = Array.from(text)[0];
+    const space = part.lastIndexOf(' ');
+    if (part.length < text.length && space > part.length / 2) part = part.slice(0, space + 1);
+    lines.push(part.trimEnd());
+    text = text.slice(part.length).trimStart();
+  }
+  return lines.length ? lines : [''];
 }
 
 // ── Session model ───────────────────────────────────────────────────────────
@@ -114,10 +131,10 @@ function toSession(agent, index, now) {
     source: agent,
     vendor,
     surface,
-    color: vendorColor(vendor),
+    color: vendor === 'ai' ? agent.color || UI.fg : vendorColor(vendor),
     name: shortHandle(agent, index),
     task: sessionTask(agent),
-    title: agent.title || agent.sessionName,
+    title: agent.terminalTitle || agent.title || agent.sessionName,
     activity: agent.toolCall?.activity || agent.activity || '',
     toolCall: agent.toolCall,
     tag: `${vendor === 'ai' ? 'ai' : vendor.slice(0, 3)}·${surface[0]}`,
@@ -145,7 +162,9 @@ function visualState(session, seat, now, index) {
   const dir = index % 2 === 0 ? 1 : -1;
 
   if (session.status === 'stopped') {
-    return onRoute(seat, ENTRANCE, Math.max(0, now - (session.stoppedAt || session.statusChangedAt)), 'walk', dir);
+    const elapsed = Math.max(0, now - (session.stoppedAt ?? session.statusChangedAt));
+    if (elapsed >= (route(seat, ENTRANCE).length - 1) * STEP_MS) return { ...ENTRANCE, state: 'exit', dir };
+    return onRoute(seat, ENTRANCE, elapsed, 'walk', dir);
   }
 
   const enterRoute = route(ENTRANCE, seat);
@@ -155,14 +174,14 @@ function visualState(session, seat, now, index) {
   }
 
   if (session.status === 'idle') {
-    const coffee = breakSpot(COFFEE_SPOTS, session.index);
-    const couch = breakSpot(COUCH_SPOTS, session.index);
+    const coffee = breakSpot(COFFEE_SPOTS, index);
+    const couch = breakSpot(COUCH_SPOTS, index);
     const toCoffee = route(seat, coffee);
     const toCoffeeDuration = toCoffee.length * STEP_MS;
     if (statusAge < toCoffeeDuration) {
       return onRoute(seat, coffee, statusAge, 'walk', dir);
     }
-    const phase = (statusAge - toCoffeeDuration + index * 500) % 7600;
+    const phase = statusAge - toCoffeeDuration;
     if (phase < 1500) {
       return { ...coffee, state: 'coffee', dir };
     }
@@ -174,13 +193,10 @@ function visualState(session, seat, now, index) {
     if (phase < 2800 + couchWalkDuration) {
       return onRoute(coffee, couch, phase - 2800, 'walk', dir);
     }
-    if (phase < 6200) {
-      return { ...couch, state: 'couch', dir };
-    }
-    return onRoute(couch, seat, phase - 6200, 'walk', dir);
+    return { ...couch, state: 'couch', dir };
   }
 
-  const returnCoffee = breakSpot(COFFEE_SPOTS, session.index);
+  const returnCoffee = breakSpot(COFFEE_SPOTS, index);
   if (session.previousStatus === 'idle' && statusAge < route(returnCoffee, seat).length * STEP_MS) {
     return onRoute(returnCoffee, seat, statusAge, 'walk', dir);
   }
@@ -223,13 +239,17 @@ function breakSpot(spots, index) {
 
 // ── Map rendering ───────────────────────────────────────────────────────────
 
-function renderMap(agents, focusIndex, now) {
+function renderMap(agents, focusIndex, now, realNow = now) {
   const tick = Math.floor(now / 100);
   const grid = MAP.map((row) => row.map((ch) => paintMapCell(ch)));
 
   drawRoomLabels(grid);
   drawSky(grid, now);
-  drawClock(grid, now);
+  drawClock(grid, realNow, now);
+  drawMonitors(grid, agents, now);
+  drawServerRack(grid, now);
+  drawFloorTexture(grid);
+  drawPlants(grid, now);
   drawCoffeeSteam(grid, now);
   drawRoomba(grid, now, agents);
 
@@ -239,14 +259,15 @@ function renderMap(agents, focusIndex, now) {
 
   const characterReserved = new Set();
   for (const agent of agents) {
-    characterReserved.add(key(agent.x, agent.y));
-    characterReserved.add(key(agent.x, agent.y + 1));
+    for (let y = agent.y - 1; y <= agent.y + 1; y++) {
+      for (let x = agent.x - 1; x <= agent.x + 1; x++) characterReserved.add(key(x, y));
+    }
     if (agent.state === 'coffee' || agent.state === 'sip') {
       characterReserved.add(key(agent.x + agent.dir, agent.y));
     }
   }
 
-  const focused = agents[focusIndex] || agents[0];
+  const focused = agents[focusIndex];
   const labelReserved = new Set(characterReserved);
   const ordered = agents.slice().sort((a, b) => {
     if (focused && a.id === focused.id) return -1;
@@ -272,6 +293,7 @@ function renderMap(agents, focusIndex, now) {
       && !drawMiniLabel(grid, labelReserved, focused)) {
       drawInitialLabel(grid, labelReserved, focused);
     }
+    if (isFloor(focused.x - 3, focused.y)) setCell(grid, focused.x - 3, focused.y, '›', UI.accent, true);
   }
 
   return grid;
@@ -283,7 +305,7 @@ function paintMapCell(ch) {
   if (ch === '▣') return cell('▣', UI.coffee);
   if (ch === '~') return cell('~', UI.couch);
   if (ch === '❀') return cell('❀', UI.plant);
-  if (ch === 'w' || ch === 'k') return cell(' ', undefined);
+  if (ch === 'w' || ch === 'k' || ch === 'r') return cell(' ', undefined);
   if (ch === '.' || ch === '+') return cell(' ', undefined);
   return cell(ch, UI.wall);
 }
@@ -295,20 +317,52 @@ function drawSky(grid, now) {
   const day = hour >= 7 && hour < 19;
   const progress = day ? (hour - 7) / 12 : ((hour - 19 + 24) % 24) / 12;
   const litWindow = Math.min(WINDOWS.length - 1, Math.floor(progress * WINDOWS.length));
-  const litCell = Math.floor((progress * WINDOWS.length - litWindow) * 2);
+  const litCell = Math.floor((progress * WINDOWS.length - litWindow) * WINDOWS[0].width);
 
   WINDOWS.forEach((window, index) => {
     const skyColor = day ? UI.skyDay : UI.skyNight;
-    const drift = (Math.floor(now / 1600) + index) % 4;
-    const texture = day
-      ? ['··', '· ', ' ·', '  '][drift]
-      : ['· ', '·˙', ' ·', '˙ '][drift];
-    setCell(grid, window.x, window.y, texture[0], skyColor);
-    setCell(grid, window.x + 1, window.y, texture[1], skyColor);
+    for (let x = 0; x < window.width; x++) {
+      const drift = (x + Math.floor(now / 900) + index * 3) % 19;
+      const ch = day ? (drift < 4 ? '._~.'[drift] : ' ') : (drift === 2 ? '*' : drift === 9 ? '·' : ' ');
+      setCell(grid, window.x + x, window.y, ch, skyColor);
+    }
     if (index === litWindow) {
-      setCell(grid, window.x + Math.min(1, litCell), window.y, day ? '☼' : '☽', day ? UI.coffee : UI.clock);
+      setCell(grid, window.x + Math.min(window.width - 1, litCell), window.y, day ? '☼' : '☽', day ? UI.coffee : UI.clock);
     }
   });
+}
+
+function drawMonitors(grid, agents, now) {
+  const frames = ['>_   ', '>.._ ', '>>_  ', '>..._', '>>>_ ', '> ._ '];
+  for (const monitor of MONITORS) {
+    const agent = agents.find((item) => item.idNumber % SEATS.length === monitor.seatIndex);
+    const working = agent && ['type', 'think'].includes(agent.state) && agent.status !== 'stopped';
+    const frame = working ? frames[(Math.floor(now / 140) + monitor.seatIndex * 2) % frames.length] : agent?.status === 'idle' ? ' z.z ' : '  ·  ';
+    drawTextCells(grid, monitor.x, monitor.y, frame, working ? agent.color : UI.muted, 5);
+  }
+}
+
+function drawServerRack(grid, now) {
+  for (let y = 6; y <= 9; y++) {
+    setCell(grid, 82, y, (Math.floor(now / (260 + y * 20)) + y) % 3 ? '●' : '·', y === 9 ? UI.accent : 'green');
+  }
+  drawTextCells(grid, 80, 12, 'server', UI.muted, 6);
+}
+
+function drawFloorTexture(grid) {
+  for (let y = 4; y < MAP_H - 1; y += 5) {
+    for (let x = 4; x < MAP_W - 2; x += 9) if (isFloor(x, y) && !inBreakRoom(x, y)) setCell(grid, x, y, '·', UI.floor);
+  }
+}
+
+function drawPlants(grid, now) {
+  for (let y = 1; y < MAP_H - 1; y++) {
+    for (let x = 1; x < MAP_W - 1; x++) {
+      if (MAP[y][x] !== '❀') continue;
+      const offset = (Math.floor(now / 800) + x) % 4 < 2 ? -1 : 1;
+      if (isFloor(x + offset, y)) setCell(grid, x + offset, y, offset < 0 ? '(' : ')', UI.plant);
+    }
+  }
 }
 
 // Text is overlaid after the map is painted, so labels never collide with the
@@ -321,14 +375,14 @@ function drawRoomLabels(grid) {
   }
 }
 
-function drawClock(grid, now) {
+function drawClock(grid, now, animationNow = now) {
   if (!CLOCK_AT) {
     return;
   }
   const date = new Date(now);
   const hh = String(date.getHours()).padStart(2, '0');
   const mm = String(date.getMinutes()).padStart(2, '0');
-  const colon = Math.floor(now / 1000) % 2 === 0 ? ':' : ' ';
+  const colon = Math.floor(animationNow / 1000) % 2 === 0 ? ':' : ' ';
   const text = `${hh}${colon}${mm}`;
   for (let index = 0; index < text.length; index += 1) {
     setCell(grid, CLOCK_AT.x + index, CLOCK_AT.y, text[index], UI.clock);
@@ -336,7 +390,7 @@ function drawClock(grid, now) {
 }
 
 function drawCoffeeSteam(grid, now) {
-  const frames = [' ', '˙', '·', '˙'];
+  const frames = ['~', '˙', '·', '~', ' '];
   const steam = frames[Math.floor(now / 400) % frames.length];
   if (isFloor(COFFEE.x, COFFEE.y - 1)) {
     setCell(grid, COFFEE.x, COFFEE.y - 1, steam, UI.muted);
@@ -348,20 +402,20 @@ function drawRoomba(grid, now, agents) {
   if (!ROOMBA_CIRCUIT.length) {
     return;
   }
-  const spot = ROOMBA_CIRCUIT[Math.floor(now / 500) % ROOMBA_CIRCUIT.length];
+  const spot = ROOMBA_CIRCUIT[Math.floor(now / 120) % ROOMBA_CIRCUIT.length];
   const occupied = agents.some((agent) => (
     (agent.x === spot.x && agent.y === spot.y) || (agent.x === spot.x && agent.y + 1 === spot.y)
   ));
   if (!occupied) {
-    setCell(grid, spot.x, spot.y, '●', UI.muted);
+    setCell(grid, spot.x, spot.y, Math.floor(now / 240) % 2 ? '◉' : '●', UI.accent);
   }
 }
 
 function buildRoombaCircuit() {
-  const top = 9;
+  const top = 14;
   const bottom = MAP_H - 2;
-  const left = 4;
-  const right = MAP_W - 3;
+  const left = 3;
+  const right = MAP_W - 2;
   const circuit = [];
   for (let x = left; x <= right; x += 1) circuit.push({ x, y: bottom });
   for (let y = bottom - 1; y >= top; y -= 1) circuit.push({ x: right, y });
@@ -373,14 +427,29 @@ function buildRoombaCircuit() {
 // ── Agents, labels, bubbles ─────────────────────────────────────────────────
 
 function drawAgent(grid, agent, tick) {
+  if (agent.state === 'exit') return;
   const color = agent.status === 'stopped' ? UI.muted : agent.color;
   const hat = agent.surface === 'desktop' ? '▔' : '˙';
   if (isFloor(agent.x, agent.y - 1)) {
     setCell(grid, agent.x, agent.y - 1, hat, color);
   }
   setCell(grid, agent.x, agent.y, 'o', color, true);
+  if (agent.state === 'type' || agent.state === 'think') {
+    const hands = agent.state === 'think' ? [' ', '?'] : tick % 4 < 2 ? ['/', '\\'] : ['─', '─'];
+    for (const [offset, ch] of [[-1, hands[0]], [1, hands[1]]]) {
+      if (isFloor(agent.x + offset, agent.y)) setCell(grid, agent.x + offset, agent.y, ch, color);
+    }
+  }
   if (isWalk(agent.x, agent.y + 1)) {
     setCell(grid, agent.x, agent.y + 1, bodyChar(agent, tick), color);
+  }
+  if (agent.state === 'walk') {
+    const side = tick % 4 < 2 ? -1 : 1;
+    if (isFloor(agent.x + side, agent.y + 1)) setCell(grid, agent.x + side, agent.y + 1, side < 0 ? '/' : '\\', color);
+  }
+  if (agent.state === 'couch') {
+    const sleepY = agent.y - (tick % 16 < 8 ? 1 : 2);
+    if (isFloor(agent.x + 1, sleepY)) setCell(grid, agent.x + 1, sleepY, tick % 16 < 8 ? 'z' : 'Z', UI.muted);
   }
   if (agent.state === 'coffee' || agent.state === 'sip') {
     const cupX = isFloor(agent.x + agent.dir, agent.y) ? agent.x + agent.dir : agent.x - agent.dir;
@@ -402,40 +471,39 @@ function inBreakRoom(x, y) {
 
 function bodyChar(agent, tick) {
   if (agent.state === 'walk') {
-    return tick % 10 < 5 ? '/' : '\\';
+    return tick % 4 < 2 ? '/' : '\\';
   }
   if (agent.state === 'couch') {
     return '_';
   }
   if (agent.state === 'type') {
-    return tick % 14 < 7 ? 'T' : 'Y';
+    return tick % 4 < 2 ? 'T' : 'Y';
   }
   return 'Y';
 }
 
 function drawMiniLabel(grid, reserved, agent) {
   const text = labelText(agent);
-  const y = agent.y - 1;
-  const start = clamp(agent.x - Math.floor(text.length / 2), 1, MAP_W - 1 - text.length);
-  if ((start > 1 && !canPaintLabel(reserved, start - 1, y)) || (start + text.length < MAP_W - 1 && !canPaintLabel(reserved, start + text.length, y))) {
+  const labelWidth = textWidth(text);
+  const y = ['type', 'think'].includes(agent.state) ? agent.y - 4 : agent.y - 1;
+  const start = clamp(agent.x - Math.floor(labelWidth / 2), 1, MAP_W - 1 - labelWidth);
+  if ((start > 1 && !canPaintLabel(reserved, start - 1, y)) || (start + labelWidth < MAP_W - 1 && !canPaintLabel(reserved, start + labelWidth, y))) {
     return false;
   }
-  for (let index = 0; index < text.length; index += 1) {
+  for (let index = 0; index < labelWidth; index += 1) {
     if (!canPaintLabel(reserved, start + index, y)) {
       return false;
     }
   }
-  const breakIndex = Math.max(text.indexOf('·'), text.indexOf(' '));
-  for (let index = 0; index < text.length; index += 1) {
-    const color = breakIndex >= 0 && index > breakIndex ? UI.muted : agent.color;
-    setCell(grid, start + index, y, text[index], color);
+  drawTextCells(grid, start, y, text, agent.color, labelWidth);
+  for (let index = 0; index < labelWidth; index += 1) {
     reserved.add(key(start + index, y));
   }
   if (start > 1 && isFloor(start - 1, y)) {
     reserved.add(key(start - 1, y));
   }
-  if (start + text.length < MAP_W - 1 && isFloor(start + text.length, y)) {
-    reserved.add(key(start + text.length, y));
+  if (start + labelWidth < MAP_W - 1 && isFloor(start + labelWidth, y)) {
+    reserved.add(key(start + labelWidth, y));
   }
   return true;
 }
@@ -445,7 +513,7 @@ function drawInitialLabel(grid, reserved, agent) {
   if (!canPaintLabel(reserved, agent.x, y)) {
     return;
   }
-  setCell(grid, agent.x, y, agent.name[0] || '?', agent.color);
+  drawTextCells(grid, agent.x, y, Array.from(agent.name)[0] || '?', agent.color, 2);
   reserved.add(key(agent.x, y));
 }
 
@@ -453,9 +521,9 @@ function drawInitialLabel(grid, reserved, agent) {
 // (bubbles live above the scene), flipping below the agent when the top of the
 // map is too close.
 function drawBubble(grid, reserved, agent) {
-  const header = truncatePlain(`${agent.name} · ${agent.tag}`, MAP_W - 8);
-  const task = truncatePlain(agent.task, MAP_W - 8);
-  const innerWidth = Math.max(header.length, task.length) + 2;
+  const header = truncatePlain(`${agent.name} · ${agent.tag}`, 30);
+  const task = truncatePlain(agent.task, 30);
+  const innerWidth = Math.max(textWidth(header), textWidth(task)) + 2;
   const totalWidth = Math.min(MAP_W - 2, innerWidth + 2);
   const flip = agent.y - 4 < 1;
   const top = flip ? agent.y + 2 : agent.y - 4;
@@ -502,9 +570,9 @@ function drawBubble(grid, reserved, agent) {
 
 function drawBubbleText(grid, x, y, text, nameLength, nameColor, maxWidth) {
   const fitted = truncatePlain(text, maxWidth);
-  for (let index = 0; index < fitted.length; index += 1) {
-    setCell(grid, x + index, y, fitted[index], index < nameLength ? nameColor : UI.muted);
-  }
+  const name = fitted.slice(0, nameLength);
+  const next = drawTextCells(grid, x, y, name, nameColor, maxWidth);
+  drawTextCells(grid, next, y, fitted.slice(nameLength), UI.muted, maxWidth - textWidth(name));
 }
 
 // ── Chrome: title, session list, status bar ─────────────────────────────────
@@ -584,7 +652,7 @@ function drawSessionRow(rows, y, session, selected) {
   const taskWidth = Math.max(0, width - taskX - (showCpu ? 8 : 1));
   drawTextCells(rows, 1, y, selected ? '›' : ' ', UI.accent);
   drawTextCells(rows, 3, y, '●', session.color);
-  drawTextCells(rows, 5, y, truncatePlain(session.name, nameWidth).padEnd(nameWidth, ' '), selected ? UI.fg : UI.muted, nameWidth);
+  drawTextCells(rows, 5, y, padRight(session.name, nameWidth, '…'), selected ? UI.fg : UI.muted, nameWidth);
   drawTextCells(rows, 6 + nameWidth, y, `[${session.tag}]`, session.color, 8);
   drawTextCells(rows, 15 + nameWidth, y, activityLabel(session).padEnd(6, ' '), UI.muted, 7);
   drawTextCells(rows, taskX, y, truncatePlain(session.task, taskWidth), selected ? UI.fg : UI.muted, taskWidth);
@@ -614,7 +682,7 @@ function drawStatus(rows, sessions, y) {
   }
   const summary = hasMetrics ? `cpu ${formatPercent(cpu)} · mem ${formatMemoryKb(rssKb)}` : '';
 
-  const keys = 'q quit  r rescan  d dashboard  / filter  k signal  p pause  h help';
+  const keys = 'q quit  d dashboard  e activity  / filter  p pause  m motion  h help';
   drawTextCells(rows, 1, y, keys, UI.muted, Math.max(0, width - summary.length - 4));
   if (summary) {
     drawTextCells(rows, Math.max(0, width - summary.length - 1), y, summary, UI.fg);
@@ -704,6 +772,7 @@ function route(from, to) {
 }
 
 function bfs(sx, sy, tx, ty) {
+  if (sx === tx && sy === ty) return [{ x: sx, y: sy }];
   const startKey = key(sx, sy);
   const targetKey = key(tx, ty);
   const previous = new Map();
@@ -728,7 +797,7 @@ function bfs(sx, sy, tx, ty) {
     }
   }
   if (!previous.has(targetKey)) {
-    return [{ x: sx, y: sy }, { x: tx, y: ty }];
+    return [{ x: sx, y: sy }];
   }
   const output = [];
   let current = targetKey;
@@ -798,19 +867,23 @@ function pasteMap(rows, map, left, top) {
   }
 }
 
-function drawTextCells(grid, x, y, text, color, maxWidth = String(text).length) {
+function drawTextCells(grid, x, y, text, color, maxWidth = textWidth(text)) {
   if (y < 0 || y >= grid.length || maxWidth <= 0) {
     return x;
   }
   const fitted = truncatePlain(String(text), maxWidth);
-  for (let index = 0; index < fitted.length; index += 1) {
-    const col = x + index;
-    if (col < 0 || col >= grid[y].length) {
-      continue;
+  let col = x;
+  for (const ch of fitted) {
+    const size = charWidth(ch);
+    if (col + size > grid[y].length) break;
+    if (size === 0) { if (col > 0 && grid[y][col - 1]) grid[y][col - 1].ch += ch; continue; }
+    if (col >= 0) {
+      grid[y][col] = cell(ch, color);
+      if (size === 2) grid[y][col + 1] = cell('', color);
     }
-    grid[y][col] = cell(fitted[index], color);
+    col += size;
   }
-  return x + fitted.length;
+  return col;
 }
 
 function fillRow(grid, y, ch, color) {
@@ -879,17 +952,7 @@ function findFirst(ch) {
 }
 
 function truncatePlain(value, maxLength) {
-  const text = String(value || '');
-  if (maxLength <= 0) {
-    return '';
-  }
-  if (text.length <= maxLength) {
-    return text;
-  }
-  if (maxLength <= 1) {
-    return text.slice(0, maxLength);
-  }
-  return `${text.slice(0, maxLength - 1)}…`;
+  return truncate(value, maxLength, '…');
 }
 
 function clamp(value, min, max) {
@@ -910,8 +973,11 @@ function escapeTag(value) {
 }
 
 module.exports = {
+  createOfficeScene,
   MAP_H,
   MAP_W,
   SEATS,
   renderOffice,
+  route,
+  toSession,
 };

@@ -1,23 +1,37 @@
 const os = require('os');
 const path = require('path');
+const unicode = require('blessed/lib/unicode');
 
-function truncate(value, width) {
-  const text = String(value || '');
+function cleanText(value) {
+  return String(value ?? '').replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '').replace(/[\x00-\x1f\x7f-\x9f{}]/g, ' ');
+}
+
+function textWidth(value) { return unicode.strWidth(cleanText(value)); }
+function charWidth(value) { return unicode.charWidth(value); }
+
+function truncate(value, width, marker = '~') {
+  const text = cleanText(value);
   if (width <= 0) {
     return '';
   }
-  if (text.length <= width) {
+  if (textWidth(text) <= width) {
     return text;
   }
-  if (width <= 1) {
-    return text.slice(0, width);
+  let result = '';
+  let used = 0;
+  const budget = Math.max(0, width - textWidth(marker));
+  for (const ch of text) {
+    const size = charWidth(ch);
+    if (used + size > budget) break;
+    result += ch;
+    used += size;
   }
-  return `${text.slice(0, width - 1)}~`;
+  return result + marker;
 }
 
-function padRight(value, width) {
-  const text = truncate(value, width);
-  return text + ' '.repeat(Math.max(0, width - text.length));
+function padRight(value, width, marker = '~') {
+  const text = truncate(value, width, marker);
+  return text + ' '.repeat(Math.max(0, width - textWidth(text)));
 }
 
 function expandHome(value) {
@@ -98,6 +112,9 @@ function escapeRegExp(value) {
 }
 
 module.exports = {
+  textWidth,
+  charWidth,
+  cleanText,
   basenameFromCommand,
   compactHome,
   escapeRegExp,

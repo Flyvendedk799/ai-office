@@ -89,3 +89,13 @@ test('caps cpu history to the configured maximum', () => {
   assert.deepEqual(store.get('a').cpuHistory, [4, 5, 6]);
 });
 
+test('exited agents retain frozen runtime and stop contributing resource usage', () => {
+  const store = new AgentStore({ startingMs: 0 });
+  store.update([candidate('a', 'active', { cpu: 80, rssKb: 9000 })], 1000);
+  store.update([], 2000);
+  assert.equal(store.get('a').runtimeMs, 2000);
+  assert.equal(store.totals().cpu, 0);
+  assert.equal(store.totals().rssKb, 0);
+  assert.equal(store.totals().stopped, 1);
+});
+

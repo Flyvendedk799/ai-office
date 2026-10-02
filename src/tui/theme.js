@@ -16,7 +16,7 @@ const VENDOR_COLORS = {
 const UI = {
   wall: 'gray',
   floor: 'gray',
-  desk: 'gray',
+  desk: 'blue',
   plant: 'green',
   coffee: 'yellow',
   couch: 'blue',

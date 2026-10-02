@@ -1,7 +1,14 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { parseProcessLine } = require('../src/discovery/processScanner');
+const { parseProcessLine, scanProcesses } = require('../src/discovery/processScanner');
 const { parseWindowsProcesses } = require('../src/discovery/windowsProcessScanner');
+
+test('scanner command failures and invalid output reject instead of simulating exits', async () => {
+  for (const platform of ['linux', 'win32']) {
+    await assert.rejects(scanProcesses({ platform, run: async () => { throw new Error('permission denied'); } }), /Process scan failed.*permission denied/);
+    await assert.rejects(scanProcesses({ platform, run: async () => ({ stdout: 'not process data' }) }), /Process scan failed.*No process rows/);
+  }
+});
 
 test('parses a ps line with cpu/mem/rss/tty metrics columns', () => {
   const now = 1_000_000;

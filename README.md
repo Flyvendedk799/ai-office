@@ -2,25 +2,25 @@
 
 **Your AI coding agents, at their desks.** `ai-office` discovers every AI agent running on your machine — Claude Code, Codex, Cursor, Aider, and friends — and renders them as tiny workers in an animated ASCII office. When an agent is busy, it types. When it goes quiet, it wanders to the break room for a coffee. When it exits, it walks out the door.
 
-<img src="https://raw.githubusercontent.com/Flyvendedk799/ai-office/main/assets/demo.svg" alt="ai-office animated demo: agents working at desks, taking coffee breaks, with a live session list" width="100%">
+<img src="assets/demo.svg" alt="ai-office animated demo: agents working at desks, taking coffee breaks, with a live session list" width="100%">
 
 There's a sun that crosses the office windows over the day (the moon takes the night shift), a wall clock that keeps real time, and a roomba that never stops patrolling. It is a process monitor. It is also an ant farm for your agents.
 
 For when you want numbers instead of ambience, press `d`:
 
-<img src="https://raw.githubusercontent.com/Flyvendedk799/ai-office/main/assets/dashboard.svg" alt="ai-office dashboard: sortable table with live CPU, memory, runtime, and current task per agent" width="100%">
+<img src="assets/dashboard.svg" alt="ai-office dashboard: sortable table with live CPU, memory, runtime, and current task per agent" width="100%">
 
 ## Quick start
 
 ```bash
-npx ai-office --demo     # fake agents, zero setup — see it move
-npx ai-office            # your real agents
+npx @flyvende/ai-office --demo     # fake agents, zero setup — see it move
+npx @flyvende/ai-office            # your real agents
 ```
 
 Or keep it around:
 
 ```bash
-npm install -g ai-office
+npm install -g @flyvende/ai-office
 ai-office
 ```
 
@@ -32,13 +32,19 @@ You start a Claude Code session. Then another one in a second terminal. Then Cod
 
 Each agent is labeled with its **real session identity** — the tab title you gave it, its generated session title, or its project — and its **live task**: the last prompt you sent it, or the tool call it's running right now.
 
-## The two views
+## One workspace, three views
 
-**Office** (default) — the animated floor. Agents arrive through the door, sit at desks, and type. Selected agents explain themselves in a speech bubble. Idle agents get coffee, sip it, and nap on the couch until work resumes. A compact session list with live CPU sits under the floor.
+**Office** (`o`, default) — a furnished ASCII studio: moving clouds and a day/night sky, animated monitors, typing hands, swaying plants, coffee steam, a blinking server rack and a patrolling roomba. Agents arrive, get coffee, lounge and return to their desks through continuous walking routes. Selection stays where you put it. A session list and current task sit below the scene; wide terminals add a session inspector with project, metrics and metadata source.
 
-**Dashboard** (`d`) — one row per agent: status, tool, session, CPU%, memory, runtime, PID, project, and current task, sortable by any of them, with a per-agent detail pane and CPU sparkline. Columns drop gracefully on narrow terminals.
+The full office needs **88 columns × 29 rows**; **130 × 35** adds room for the inspector and session list. Smaller terminals show a compact studio, and very short terminals show the metrics table. More than 12 agents get additional floors; selecting an agent follows them to their floor. Filtering preserves everyone’s desk.
 
-Both views share the same discovery engine, updated every couple of seconds.
+**Dashboard** (`d`) — one row per agent: status, tool, session, CPU%, memory, runtime, PID, project, and current task, sortable by CPU, memory, runtime, tool, status or session name, with a per-agent detail pane and CPU sparkline. Columns drop gracefully on narrow terminals.
+
+**Activity** (`e`, `--activity`) — a scrollable feed of arrivals, status changes, process exits and scan errors, newest first. It retains the last 200 events of this run even after agents disappear. Use `--history` for recorded sessions from previous runs.
+
+All three views share selection and a text/PID filter. The bottom health bar shows scan age, duration and errors. A failed scan keeps the last good snapshot; `r` retries. Process exits are observations, not proof that a task succeeded.
+
+Animation runs at **30 FPS** by default, independently of discovery. `p` pauses movement and resumes at the same position while data keeps updating. `m` or `--reduced-motion` seats agents immediately and freezes decorative motion.
 
 ## Also included
 
@@ -62,14 +68,16 @@ Completed sessions are appended to `~/.ai-office/history.jsonl` (disable with `-
 ```text
 q / Ctrl-C   quit                    r     rescan now
 tab / ↓ →    select next agent      ← ↑   select previous
-d / o        office ⇄ dashboard      s     cycle dashboard sort
+o / d / e    office / dashboard / activity
+s            cycle dashboard sort
 /            filter sessions         esc   close help / clear filter
 k            signal agent (TERM/INT/KILL)
-c            show a "cd <project>" hint
-p            pause animation         h     help
+c            show a quoted project-directory command
+p            pause animation         m     reduced motion
+h            help                    ↑↓    scroll activity
 ```
 
-There's also a terminal bell + toast when an agent finishes, and an optional idle alert (`idleAlertMs`).
+There's also a terminal bell + toast when an agent exits, and an optional idle alert (`idleAlertMs`).
 
 ## What it detects, and how
 
@@ -110,6 +118,8 @@ Config lives at `~/.ai-office/config.json` (or pass `--config <path>`). Everythi
   "bellOnFinish": true,
   "idleAlertMs": 0,
   "defaultView": "office",
+  "animationFps": 30,
+  "reducedMotion": false,
   "customTools": [
     {
       "key": "my-agent",
@@ -132,10 +142,12 @@ Config lives at `~/.ai-office/config.json` (or pass `--config <path>`). Everythi
 | `enableHistory` | `true` | Record completed sessions to `~/.ai-office/history.jsonl`. |
 | `bellOnFinish` | `true` | Terminal bell when an agent finishes. |
 | `idleAlertMs` | `0` | Alert when an agent idles this long (`0` = off). |
-| `defaultView` | `"office"` | `"office"` or `"dashboard"`. |
+| `defaultView` | `"office"` | `"office"`, `"dashboard"` or `"activity"`. |
+| `animationFps` | `30` | Animation cadence, clamped to 5–60 FPS. |
+| `reducedMotion` | `false` | Static scenery and seated agents; discovery remains live. |
 | `customTools` | `[]` | Extra detectors; `commandPatterns` are substrings, prefix `regex:` for regex. |
 
-CLI flags override config: `--scan-interval`, `--dashboard`, `--no-history`, `--filter <text>`, `--debug`.
+CLI flags override config: `--scan-interval`, `--dashboard`, `--activity`, `--reduced-motion`, `--no-history`, `--filter <text>`, `--debug`.
 
 ## Architecture
 
@@ -144,7 +156,11 @@ bin/ai-office.js        CLI entry: TUI, --once, --watch, --history
 src/discovery/          process scanners (ps / PowerShell CIM), cwd + session metadata, titles
 src/detection/          provider modules that classify processes into agents
 src/state/              cross-scan store, lifecycle events, JSONL history
-src/tui/office.js       the animated office renderer
+src/tui/workspace.js    stable focus, scan health and bounded lifecycle feed
+src/tui/office.js       full / compact office and inspector renderer
+src/tui/floor.js        character art and walkable geometry
+src/tui/motion.js       continuous routes and pause-aware animation clock
+src/tui/activity.js     scrollable lifecycle feed
 src/tui/dashboard.js    the metrics table renderer
 src/tui/theme.js        one palette for everything
 src/demo.js             fake agents for --demo
