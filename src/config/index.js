@@ -32,8 +32,8 @@ function mergeConfig(base, override) {
 function normalizeConfig(config) {
   const normalized = {
     ...config,
-    scanIntervalMs: numberOr(config.scanIntervalMs, DEFAULT_CONFIG.scanIntervalMs),
-    stoppedGraceMs: numberOr(config.stoppedGraceMs, DEFAULT_CONFIG.stoppedGraceMs),
+    scanIntervalMs: Math.max(250, numberOr(config.scanIntervalMs, DEFAULT_CONFIG.scanIntervalMs)),
+    stoppedGraceMs: Math.max(0, numberOr(config.stoppedGraceMs, DEFAULT_CONFIG.stoppedGraceMs)),
     enableWindowTitleScan: config.enableWindowTitleScan !== false,
     enableAppWindowTitleScan: Boolean(config.enableAppWindowTitleScan),
     enableSessionMetadataScan: config.enableSessionMetadataScan !== false,
@@ -42,8 +42,10 @@ function normalizeConfig(config) {
       ? expandHome(config.historyPath.trim())
       : undefined,
     bellOnFinish: config.bellOnFinish !== false,
-    idleAlertMs: numberOr(config.idleAlertMs, DEFAULT_CONFIG.idleAlertMs),
-    defaultView: config.defaultView === 'dashboard' ? 'dashboard' : 'office',
+    idleAlertMs: Math.max(0, numberOr(config.idleAlertMs, DEFAULT_CONFIG.idleAlertMs)),
+    defaultView: ['office', 'dashboard', 'activity'].includes(config.defaultView) ? config.defaultView : 'office',
+    animationFps: Math.max(5, Math.min(60, Math.round(numberOr(config.animationFps, DEFAULT_CONFIG.animationFps)))),
+    reducedMotion: config.reducedMotion === true,
     sessionFolderPaths: asStringArray(config.sessionFolderPaths).map(expandHome),
     excludePatterns: asStringArray(config.excludePatterns),
     terminalAgentKeywords: asStringArray(config.terminalAgentKeywords),
@@ -74,7 +76,7 @@ function asStringArray(value) {
 }
 
 function numberOr(value, fallback) {
-  return Number.isFinite(Number(value)) ? Number(value) : fallback;
+  return value != null && value !== '' && Number.isFinite(Number(value)) ? Number(value) : fallback;
 }
 
 function loadConfig(configPath) {

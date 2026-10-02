@@ -7,23 +7,25 @@ const { scanProcessesWindows } = require('./windowsProcessScanner');
 
 const execFileAsync = promisify(execFile);
 
-async function scanProcesses({ logger, platform = process.platform } = {}) {
+async function scanProcesses({ logger, platform = process.platform, run = execFileAsync } = {}) {
   if (platform === 'win32') {
-    return scanProcessesWindows({ logger });
+    return scanProcessesWindows({ logger, run });
   }
-  return scanProcessesPosix({ logger });
+  return scanProcessesPosix({ logger, run });
 }
 
-async function scanProcessesPosix({ logger } = {}) {
+async function scanProcessesPosix({ logger, run = execFileAsync } = {}) {
   const started = Date.now();
   try {
-    const { stdout } = await execFileAsync('ps', ['-ww', '-axo', 'pid=,ppid=,stat=,etime=,%cpu=,%mem=,rss=,tt=,command='], {
+    const { stdout } = await run('ps', ['-ww', '-axo', 'pid=,ppid=,stat=,etime=,%cpu=,%mem=,rss=,tt=,command='], {
       maxBuffer: 12 * 1024 * 1024,
+      timeout: 15000,
     });
     const processes = stdout
       .split('\n')
       .map((line) => parseProcessLine(line, started))
       .filter(Boolean);
+    if (!processes.length) throw new Error('No process rows returned by ps');
     const cwdByPid = await collectProcessCwds(processes, logger);
     for (const proc of processes) {
       if (cwdByPid.has(proc.pid)) {
@@ -35,7 +37,7 @@ async function scanProcessesPosix({ logger } = {}) {
     return processes;
   } catch (error) {
     logger?.warn('process scan failed', { error: error.message });
-    return [];
+    throw new Error(`Process scan failed: ${error.message}`);
   }
 }
 

@@ -13,6 +13,8 @@ const DEFAULT_CONFIG = {
   bellOnFinish: true,
   idleAlertMs: 0,
   defaultView: 'office',
+  animationFps: 30,
+  reducedMotion: false,
   sessionFolderPaths: [],
   // Match our own entry points precisely — a bare "ai-office" substring would
   // also hide real agents working inside a folder that happens to bear the name.

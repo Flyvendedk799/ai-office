@@ -5,13 +5,22 @@
   "enableAppWindowTitleScan": false,
   "enableSessionMetadataScan": true,
   "enableHistory": true,
-  "historyPath": "~/.agent-office/history.jsonl",
+  "historyPath": "~/.ai-office/history.jsonl",
   "bellOnFinish": true,
   "idleAlertMs": 0,
   "defaultView": "office",
   "sessionFolderPaths": [],
   "excludePatterns": [
-    "agent-office"
+    "bin/ai-office.js",
+    "bin\\ai-office.js",
+    "ai-office.cmd",
+    "agent-office",
+    "Sparkle.framework",
+    "org.sparkle-project",
+    "Autoupdate",
+    "Updater.app",
+    "crashpad",
+    "ggml-metal"
   ],
   "terminalAgentKeywords": [
     "aider",
@@ -44,5 +53,7 @@
       "windowTitlePatterns": [],
       "sessionFolderPaths": []
     }
-  ]
+  ],
+  "animationFps": 30,
+  "reducedMotion": false
 }

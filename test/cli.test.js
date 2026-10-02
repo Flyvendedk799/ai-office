@@ -51,3 +51,19 @@ test('CLI rejects an invalid scan interval', async () => {
     },
   );
 });
+
+test('CLI rejects missing option values, invalid history limits and piped TUI use', async () => {
+  for (const [args, message] of [
+    [['--config'], /--config requires a path/],
+    [['--config='], /--config requires a path/],
+    [['--filter', '--once'], /--filter requires text/],
+    [['--history=invalid'], /positive integer/],
+    [['--demo', '--activity'], /Interactive terminal required/],
+  ]) {
+    await assert.rejects(execFileAsync(process.execPath, [CLI, ...args]), (error) => {
+      assert.equal(error.code, 2);
+      assert.match(error.stderr, message);
+      return true;
+    });
+  }
+});

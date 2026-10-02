@@ -39,7 +39,7 @@ class AgentStore {
       }
 
       const age = now - existing.appearAt;
-      const status = age < this.startingMs ? 'starting' : candidate.statusHint || 'active';
+      const status = age < this.startingMs ? 'starting' : candidate.statusHint || candidate.status || 'active';
       const statusChanged = status !== existing.status;
       const cpuHistory = pushCapped(existing.cpuHistory, Number.isFinite(candidate.cpu) ? candidate.cpu : 0, this.maxCpuHistory);
       const updated = {
@@ -67,6 +67,10 @@ class AgentStore {
         agent.previousStatus = agent.status;
         agent.statusChangedAt = now;
         agent.status = 'stopped';
+        agent.runtimeMs = Number.isFinite(agent.startedAt) ? Math.max(0, now - agent.startedAt) : agent.runtimeMs;
+        agent.cpu = 0;
+        agent.mem = 0;
+        agent.rssKb = 0;
         this.recordEvent('stopped', agent, now);
       }
     }
@@ -174,7 +178,7 @@ class AgentStore {
 
   // Select relative to an explicit ordering (defaults to desk order).
   selectNext(delta = 1, order) {
-    const agents = order && order.length ? order : this.list();
+    const agents = order ?? this.list();
     if (agents.length === 0) {
       this.selectedId = undefined;
       return undefined;
